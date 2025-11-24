@@ -30,6 +30,7 @@
 
 // --- Helpers ---
 #include "../include/helpers.hpp"
+#include "../include/CommandQueue.hpp"
 
 // --- Namespaces ---
 using namespace Microsoft::WRL; // For ComPtr
@@ -47,20 +48,15 @@ RECT g_WindowRect;                  // Window rectangle (for fullscreen toggle)
 SDL_Window* g_Window;               // The Window from SDL
 
 ComPtr<ID3D12Device2>               g_Device;
-ComPtr<ID3D12CommandQueue>          g_CommandQueue;
 ComPtr<IDXGISwapChain4>             g_SwapChain;
 ComPtr<ID3D12Resource>              g_BackBuffers[g_NumFrames];
 ComPtr<ID3D12GraphicsCommandList>   g_CommandList;
-ComPtr<ID3D12CommandAllocator>      g_CommandAllocators[g_NumFrames];
 ComPtr<ID3D12DescriptorHeap>        g_RTVDescriptorHeap;
 UINT g_RTVDescriptorSize;
 UINT g_CurrentBackBufferIndex;
 
 // --- Synchronization objects ---
-ComPtr<ID3D12Fence>                 g_Fence;
-uint64_t                            g_FenceValue = 0;
 uint64_t                            g_FrameFenceValues[g_NumFrames] = {};
-HANDLE                              g_FenceEvent;
 
 // --- Swap Chain & Window State ---
 bool g_VSync                    = true;
@@ -68,26 +64,16 @@ bool g_TearingSupported         = false;
 bool g_Fullscreen               = false;
 
 
-
 // ---- Function Declarations ------
 #pragma region fn declarations
 void EnableDebugLayer();
 ComPtr<IDXGIAdapter4> GetAdapter(bool useWarp);
 ComPtr<ID3D12Device2> CreateDevice(ComPtr<IDXGIAdapter4> adapter);
-ComPtr<ID3D12CommandQueue> CreateCommandQueue(ComPtr<ID3D12Device2> device, D3D12_COMMAND_LIST_TYPE type);
 bool CheckTearingSupport();
-ComPtr<IDXGISwapChain4> CreateSwapChain(HWND hWnd, ComPtr<ID3D12CommandQueue> commandQueue, uint32_t width, uint32_t height, uint32_t bufferCount);
+ComPtr<IDXGISwapChain4> CreateSwapChain(HWND hWnd, CommandQueue& commandQueue, uint32_t width, uint32_t height, uint32_t bufferCount);
 ComPtr<ID3D12DescriptorHeap> CreateDescriptorHeap(ComPtr<ID3D12Device2> device, D3D12_DESCRIPTOR_HEAP_TYPE type, uint32_t numDescriptors);
 void UpdateRenderTargetViews(ComPtr<ID3D12Device2> device, ComPtr<IDXGISwapChain4> swapChain, ComPtr<ID3D12DescriptorHeap> descriptorHeap);
-ComPtr<ID3D12CommandAllocator> CreateCommandAllocator(ComPtr<ID3D12Device2> device, D3D12_COMMAND_LIST_TYPE type);
-ComPtr<ID3D12GraphicsCommandList> CreateCommandList(ComPtr<ID3D12Device2> device, ComPtr<ID3D12CommandAllocator> commandAllocator, D3D12_COMMAND_LIST_TYPE type);
-ComPtr<ID3D12Fence> CreateFence(ComPtr<ID3D12Device2> device);
-HANDLE CreateEventHandle();
-
-// ------------- Helpers for Synchronization ------------- //
-uint64_t Signal(ComPtr<ID3D12CommandQueue> commandQueue, ComPtr<ID3D12Fence> fence, uint64_t& fenceValue);
-void WaitForFenceValue(ComPtr<ID3D12Fence> fence, uint64_t fenceValue, HANDLE fenceEvent, std::chrono::milliseconds duration);
-void Flush(ComPtr<ID3D12CommandQueue> commandQueue, ComPtr<ID3D12Fence> fence, uint64_t& fenceValue, HANDLE fenceEvent);
+ComPtr<ID3D12GraphicsCommandList> CreateCommandList(ComPtr<ID3D12Device2> device, ID3D12CommandAllocator* commandAllocator, D3D12_COMMAND_LIST_TYPE type);
 
 // ------------- Update,Render,Resize Functions ------------------//
 void Update();
@@ -95,6 +81,10 @@ void Render();
 void Resize(uint32_t width, uint32_t height);
 void SetFullscreen(bool fullscreen);
 #pragma endregion
+
+// ---------- DX12 Mini Engine Based Abstractions ------------ //
+// --- Command Queue ---
+CommandQueue g_CommandQueue(D3D12_COMMAND_LIST_TYPE_DIRECT);
 
 int main(int argc, char* argv[])
 {
@@ -126,6 +116,7 @@ int main(int argc, char* argv[])
         SDL_Quit();
         return 1;
     }
+    std::cout << "Successfully created window and got HWND. Ready for DX12 \n";
 
     // --- Initialize g_WindowRect ---
     // Now that we have the HWND, get its client area rectangle
@@ -154,8 +145,8 @@ int main(int argc, char* argv[])
         std::cout << "D3D12 device created successfully.\n";
 
         // Create the Command Queue
-        g_CommandQueue = CreateCommandQueue(g_Device, D3D12_COMMAND_LIST_TYPE_DIRECT);
-        std::cout << "Command queue created successfully.\n";
+        // Initialize the Command Queue wrapper
+        g_CommandQueue.Create(g_Device.Get());
 
         // Check for Tearing Support
         g_TearingSupported = CheckTearingSupport();
@@ -178,26 +169,10 @@ int main(int argc, char* argv[])
         std::cout << "Render Target Views created successfully.\n";
 
         // Create the Command Allocators
-        // We need one allocator for each frame in flight.
-        for (int i = 0; i < g_NumFrames; ++i)
-        {
-            g_CommandAllocators[i] = CreateCommandAllocator(g_Device, D3D12_COMMAND_LIST_TYPE_DIRECT);
-        }
-        std::cout << g_NumFrames << "Command allocators created successfully.\n";
-
-        // Create the Command List
-        // Create the command list using the first allocator.
-        // It will be reset in the game loop to use the correct allocator for the current frame.
-        g_CommandList = CreateCommandList(g_Device, g_CommandAllocators[0], D3D12_COMMAND_LIST_TYPE_DIRECT);
-        std::cout << "Command list created successfully.\n";
-
-        // Create the Fence
-        g_Fence = CreateFence(g_Device);
-        std::cout << "Fence created successfully.\n";
-
-        // Create the Fence Event
-        g_FenceEvent = CreateEventHandle();
-        std::cout << "Fence event created successfully.\n";
+        // When creating the initial CommandList, request an allocator from the queue:
+        ID3D12CommandAllocator* allocator = g_CommandQueue.RequestAllocator();
+        g_CommandList = CreateCommandList(g_Device, allocator, D3D12_COMMAND_LIST_TYPE_DIRECT);
+        g_CommandQueue.DiscardAllocator(0, allocator); // Discard immediately since we are just setting up
 
         // --- Finish Initialization ---
         // Get the index of the current back buffer.
@@ -206,21 +181,12 @@ int main(int argc, char* argv[])
         // Mark initialization as complete.
         g_IsInitialized = true;
         std::cout << "DirectX 12 Initialization Complete. Entering main loop...\n";
-
-        // Example:
-        // ThrowIfFailed(D3D12CreateDevice(...)); 
-  
-        // ID3D12Device* device = CreateDevice();
-        // IDXGISwapChain* swapChain = CreateSwapChain(hwnd, ...);
-        // ...etc
     }
     catch (std::exception& e)
     {
         std::cerr << "DX12 Init Failed: " << e.what() << '\n';
         return 1;
     }
-
-	std::cout << "Successfully created window and got HWND. Ready for DX12 \n";
 
     // --- Main Game Loop ---
     bool running = true;
@@ -271,13 +237,13 @@ int main(int argc, char* argv[])
     // Make sure the GPU is no longer using any resources before we clean up.
     if (g_IsInitialized)
     {
-        Flush(g_CommandQueue, g_Fence, g_FenceValue, g_FenceEvent);
+        //Flush(g_CommandQueue, g_Fence, g_FenceValue, g_FenceEvent);
+        g_CommandQueue.WaitForIdle(); // Replaces Flush(...)
     }
 
     // Destroy DX12 objects...
     // ComPtrs will auto-release here.
-    // Close the event handle.
-    ::CloseHandle(g_FenceEvent);
+    g_CommandQueue.Shutdown();
 
     SDL_DestroyWindow(g_Window);
     SDL_Quit();
@@ -379,21 +345,6 @@ ComPtr<ID3D12Device2> CreateDevice(ComPtr<IDXGIAdapter4> adapter)
     return d3d12Device2;
 }
 
-ComPtr<ID3D12CommandQueue> CreateCommandQueue(ComPtr<ID3D12Device2> device, D3D12_COMMAND_LIST_TYPE type)
-{
-    ComPtr<ID3D12CommandQueue> d3d12CommandQueue;
-
-    D3D12_COMMAND_QUEUE_DESC desc = {};
-    desc.Type = type;
-    desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
-    desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-    desc.NodeMask = 0;
-
-    ThrowIfFailed(device->CreateCommandQueue(&desc, IID_PPV_ARGS(&d3d12CommandQueue)));
-
-    return d3d12CommandQueue;
-}
-
 bool CheckTearingSupport()
 {
     BOOL allowTearing = FALSE;
@@ -420,9 +371,7 @@ bool CheckTearingSupport()
     return allowTearing == TRUE;
 }
 
-ComPtr<IDXGISwapChain4> CreateSwapChain(HWND hWnd,
-    ComPtr<ID3D12CommandQueue> commandQueue,
-    uint32_t width, uint32_t height, uint32_t bufferCount)
+ComPtr<IDXGISwapChain4> CreateSwapChain(HWND hWnd, CommandQueue& commandQueue, uint32_t width, uint32_t height, uint32_t bufferCount)
 {
     ComPtr<IDXGISwapChain4> dxgiSwapChain4;
     ComPtr<IDXGIFactory4> dxgiFactory4;
@@ -449,7 +398,7 @@ ComPtr<IDXGISwapChain4> CreateSwapChain(HWND hWnd,
 
     ComPtr<IDXGISwapChain1> swapChain1;
     ThrowIfFailed(dxgiFactory4->CreateSwapChainForHwnd(
-        commandQueue.Get(),
+        commandQueue.GetCommandQueue(),
         hWnd,
         &swapChainDesc,
         nullptr,
@@ -499,20 +448,11 @@ void UpdateRenderTargetViews(ComPtr<ID3D12Device2> device,
     }
 }
 
-ComPtr<ID3D12CommandAllocator> CreateCommandAllocator(ComPtr<ID3D12Device2> device,
-    D3D12_COMMAND_LIST_TYPE type)
-{
-    ComPtr<ID3D12CommandAllocator> commandAllocator;
-    ThrowIfFailed(device->CreateCommandAllocator(type, IID_PPV_ARGS(&commandAllocator)));
-
-    return commandAllocator;
-}
-
 ComPtr<ID3D12GraphicsCommandList> CreateCommandList(ComPtr<ID3D12Device2> device,
-    ComPtr<ID3D12CommandAllocator> commandAllocator, D3D12_COMMAND_LIST_TYPE type)
+    ID3D12CommandAllocator* commandAllocator, D3D12_COMMAND_LIST_TYPE type)
 {
     ComPtr<ID3D12GraphicsCommandList> commandList;
-    ThrowIfFailed(device->CreateCommandList(0, type, commandAllocator.Get(), nullptr, IID_PPV_ARGS(&commandList)));
+    ThrowIfFailed(device->CreateCommandList(0, type, commandAllocator, nullptr, IID_PPV_ARGS(&commandList)));
 
     // Command lists are created in the recording state.
     // Close it so it's ready to be Reset() for the first time.
@@ -520,53 +460,6 @@ ComPtr<ID3D12GraphicsCommandList> CreateCommandList(ComPtr<ID3D12Device2> device
 
     return commandList;
 }
-
-ComPtr<ID3D12Fence> CreateFence(ComPtr<ID3D12Device2> device)
-{
-    ComPtr<ID3D12Fence> fence;
-
-    ThrowIfFailed(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
-
-    return fence;
-}
-
-HANDLE CreateEventHandle()
-{
-    HANDLE fenceEvent;
-
-    fenceEvent = ::CreateEvent(NULL, FALSE, FALSE, NULL);
-    assert(fenceEvent && "Failed to create fence event.");
-
-    return fenceEvent;
-}
-
-uint64_t Signal(ComPtr<ID3D12CommandQueue> commandQueue, ComPtr<ID3D12Fence> fence,
-    uint64_t& fenceValue)
-{
-    uint64_t fenceValueForSignal = ++fenceValue;
-    ThrowIfFailed(commandQueue->Signal(fence.Get(), fenceValueForSignal));
-
-    return fenceValueForSignal;
-}
-
-void WaitForFenceValue(ComPtr<ID3D12Fence> fence, uint64_t fenceValue, HANDLE fenceEvent,
-    std::chrono::milliseconds duration = std::chrono::milliseconds::max())
-{
-    if (fence->GetCompletedValue() < fenceValue)
-    {
-        ThrowIfFailed(fence->SetEventOnCompletion(fenceValue, fenceEvent));
-        ::WaitForSingleObject(fenceEvent, static_cast<DWORD>(duration.count()));
-    }
-}
-
-void Flush(ComPtr<ID3D12CommandQueue> commandQueue, ComPtr<ID3D12Fence> fence,
-    uint64_t& fenceValue, HANDLE fenceEvent)
-{
-    uint64_t fenceValueForSignal = Signal(commandQueue, fence, fenceValue);
-    WaitForFenceValue(fence, fenceValueForSignal, fenceEvent);
-}
-
-
 
 // --- Update and Render Functions ---- //
 void Update()
@@ -596,18 +489,24 @@ void Update()
 
 void Render()
 {
-    /*auto commandAllocator = g_CommandAllocators[g_CurrentBackBufferIndex];
+    // 1. Request an allocator
+    ID3D12CommandAllocator* allocator = g_CommandQueue.RequestAllocator();
+
+    // 2. Wait for previous frame
+    g_CommandQueue.WaitForFence(g_FrameFenceValues[g_CurrentBackBufferIndex]);
+
+    // 3. Reset command list
+    g_CommandList->Reset(allocator, nullptr);
+
     auto backBuffer = g_BackBuffers[g_CurrentBackBufferIndex];
 
-    commandAllocator->Reset();
-    g_CommandList->Reset(commandAllocator.Get(), nullptr);
+    // --- RECORD COMMANDS ---
 
-    // Clear the render target.
+    // Transition to RENDER_TARGET
     {
         CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
             backBuffer.Get(),
             D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-
         g_CommandList->ResourceBarrier(1, &barrier);
 
         FLOAT clearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
@@ -617,85 +516,27 @@ void Render()
         g_CommandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
     }
 
-    // Present
+    // Transition to PRESENT (MUST BE DONE BEFORE EXECUTE)
     {
         CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
             backBuffer.Get(),
             D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
         g_CommandList->ResourceBarrier(1, &barrier);
-
-        ThrowIfFailed(g_CommandList->Close());
-
-        ID3D12CommandList* const commandLists[] = {
-            g_CommandList.Get()
-        };
-        g_CommandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
-
-        UINT syncInterval = g_VSync ? 1 : 0;
-        UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
-        ThrowIfFailed(g_SwapChain->Present(syncInterval, presentFlags));
-
-        g_FrameFenceValues[g_CurrentBackBufferIndex] = Signal(g_CommandQueue, g_Fence, g_FenceValue);
-
-        g_CurrentBackBufferIndex = g_SwapChain->GetCurrentBackBufferIndex();
-
-        WaitForFenceValue(g_Fence, g_FrameFenceValues[g_CurrentBackBufferIndex], g_FenceEvent);
-    }*/
-    // 1. Get the allocator and buffer for the CURRENT frame.
-    auto commandAllocator = g_CommandAllocators[g_CurrentBackBufferIndex];
-    auto backBuffer = g_BackBuffers[g_CurrentBackBufferIndex];
-
-    // 2. WAIT for the GPU to be finished with the resources for THIS frame.
-    //    We check the fence value we stored *last time* we used this frame index.
-    WaitForFenceValue(g_Fence, g_FrameFenceValues[g_CurrentBackBufferIndex], g_FenceEvent);
-
-    // 3. NOW it is safe to reset the allocator and command list.
-    commandAllocator->Reset();
-    g_CommandList->Reset(commandAllocator.Get(), nullptr);
-
-    // 4. Record commands (clear, transitions)
-    // Clear the render target.
-    {
-        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-            backBuffer.Get(),
-            D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-
-        g_CommandList->ResourceBarrier(1, &barrier);
-
-        FLOAT clearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
-        CD3DX12_CPU_DESCRIPTOR_HANDLE rtv(g_RTVDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
-            g_CurrentBackBufferIndex, g_RTVDescriptorSize);
-
-        g_CommandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
     }
 
-    // Present
-    {
-        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-            backBuffer.Get(),
-            D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-        g_CommandList->ResourceBarrier(1, &barrier);
+    // --- EXECUTE ---
+    // This closes the list and submits it
+    uint64_t fenceValue = g_CommandQueue.ExecuteCommandList(g_CommandList.Get());
 
-        // 5. Close the command list. This should no longer throw an exception.
-        ThrowIfFailed(g_CommandList->Close());
+    // --- PRESENT ---
+    UINT syncInterval = g_VSync ? 1 : 0;
+    UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
+    ThrowIfFailed(g_SwapChain->Present(syncInterval, presentFlags));
 
-        // 6. Execute the commands.
-        ID3D12CommandList* const commandLists[] = {
-            g_CommandList.Get()
-        };
-        g_CommandQueue->ExecuteCommandLists(_countof(commandLists), commandLists);
-
-        // 7. Present the frame.
-        UINT syncInterval = g_VSync ? 1 : 0;
-        UINT presentFlags = g_TearingSupported && !g_VSync ? DXGI_PRESENT_ALLOW_TEARING : 0;
-        ThrowIfFailed(g_SwapChain->Present(syncInterval, presentFlags));
-
-        // 8. Signal the fence and store the NEW value for THIS frame index.
-        g_FrameFenceValues[g_CurrentBackBufferIndex] = Signal(g_CommandQueue, g_Fence, g_FenceValue);
-
-        // 9. Get the index for the NEXT frame.
-        g_CurrentBackBufferIndex = g_SwapChain->GetCurrentBackBufferIndex();
-    }
+    // --- CLEANUP ---
+    g_CommandQueue.DiscardAllocator(fenceValue, allocator);
+    g_FrameFenceValues[g_CurrentBackBufferIndex] = fenceValue;
+    g_CurrentBackBufferIndex = g_SwapChain->GetCurrentBackBufferIndex();
 }
 
 void Resize(uint32_t width, uint32_t height)
@@ -708,16 +549,16 @@ void Resize(uint32_t width, uint32_t height)
 
         // Flush the GPU queue to make sure the swap chain's back buffers
         // are not being referenced by an in-flight command list.
-        Flush(g_CommandQueue, g_Fence, g_FenceValue, g_FenceEvent);
+        g_CommandQueue.WaitForIdle();
 
         for (int i = 0; i < g_NumFrames; ++i)
         {
             // Any references to the back buffers must be released
             // before the swap chain can be resized.
             g_BackBuffers[i].Reset();
-            //g_FrameFenceValues[i] = g_FrameFenceValues[g_CurrentBackBufferIndex];
+
             // Correct way: Set all fence values to the value we just flushed.
-            g_FrameFenceValues[i] = g_FenceValue;
+            g_FrameFenceValues[i] = g_CommandQueue.GetLastCompletedFenceValue();
         }
 
         DXGI_SWAP_CHAIN_DESC swapChainDesc = {};

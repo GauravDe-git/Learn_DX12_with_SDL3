@@ -89,9 +89,13 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="source\CommandAllocatorPool.cpp" />
+    <ClCompile Include="source\CommandQueue.cpp" />
     <ClCompile Include="source\main.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\CommandAllocatorPool.hpp" />
+    <ClInclude Include="include\CommandQueue.hpp" />
     <ClInclude Include="include\helpers.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

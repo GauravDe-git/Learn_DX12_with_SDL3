@@ -3,6 +3,9 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/main/VisualStudio.gitignore
 
+# My custom files
+microsoft_dx12_miniengine_core/
+
 # User-specific files
 *.rsuser
 *.suo
