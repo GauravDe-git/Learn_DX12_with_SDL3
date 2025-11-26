@@ -89,17 +89,27 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="source\ColorBuffer.cpp" />
     <ClCompile Include="source\CommandAllocatorPool.cpp" />
     <ClCompile Include="source\CommandQueue.cpp" />
+    <ClCompile Include="source\DepthBuffer.cpp" />
+    <ClCompile Include="source\DescriptorHeap.cpp" />
     <ClCompile Include="source\GameCore.cpp" />
+    <ClCompile Include="source\GraphicsCore.cpp" />
     <ClCompile Include="source\main.cpp" />
+    <ClCompile Include="source\PixelBuffer.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\ColorBuffer.hpp" />
     <ClInclude Include="include\CommandAllocatorPool.hpp" />
     <ClInclude Include="include\CommandQueue.hpp" />
+    <ClInclude Include="include\DepthBuffer.hpp" />
+    <ClInclude Include="include\DescriptorHeap.hpp" />
     <ClInclude Include="include\GameCore.hpp" />
     <ClInclude Include="include\GpuResource.hpp" />
+    <ClInclude Include="include\GraphicsCore.hpp" />
     <ClInclude Include="include\helpers.hpp" />
+    <ClInclude Include="include\PixelBuffer.hpp" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shaders\PixelShader.hlsl">
