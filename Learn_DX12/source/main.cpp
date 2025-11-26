@@ -255,7 +255,7 @@ public:
         Context.Finish();
 
         // 11. Present
-        Display::Present();
+        Display::Present(m_VSync, Display::CheckTearingSupport());
     }
 
     virtual void OnKeyDown(SDL_Keycode key) override

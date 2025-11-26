@@ -165,9 +165,13 @@ void Display::Resize(uint32_t width, uint32_t height)
     }
 }
 
-void Display::Present(void)
+void Display::Present(bool enableVSync, bool allowTearing)
 {
-    m_SwapChain->Present(1, 0); // VSync On by default for now
+    UINT syncInterval = enableVSync ? 1 : 0;
+    UINT presentFlags = (allowTearing && !enableVSync) ? DXGI_PRESENT_ALLOW_TEARING : 0;
+
+    m_SwapChain->Present(syncInterval, presentFlags);
+
 
     // Update fence for the buffer we just presented
     m_FrameFenceValues[m_CurrentBackBufferIndex] = Graphics::g_CommandQueue.GetNextFenceValue() - 1;
@@ -194,10 +198,8 @@ uint32_t Display::GetHeight(void)
     return m_Height;
 }
 
-// Helper (Internal)
-namespace Display
-{
-    bool CheckTearingSupport()
+// Helper 
+   bool Display::CheckTearingSupport()
     {
         BOOL allowTearing = FALSE;
         ComPtr<IDXGIFactory4> factory4;
@@ -216,4 +218,3 @@ namespace Display
         }
         return allowTearing == TRUE;
     }
-}
