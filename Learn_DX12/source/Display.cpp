@@ -107,11 +107,24 @@ void Display::Initialize(void)
 
 void Display::Shutdown(void)
 {
-    m_SwapChain.Reset();
+    // 1. Wait for GPU to finish all work before destroying anything
+    Graphics::g_CommandQueue.WaitForIdle();
+
+    // 2. Destroy the ColorBuffers (wrappers)
     for (int i = 0; i < SWAP_CHAIN_BUFFER_COUNT; ++i)
     {
         m_DisplayPlane[i].Destroy();
     }
+
+    // 3. Release the Swap Chain
+    m_SwapChain.Reset();
+
+    // 4. Release the RTV Heap
+    // DescriptorHeap class doesn't have a Destroy() method, 
+    // but since it uses ComPtr internally, can just let it go out of scope,
+    // OR you can add a Destroy() method to DescriptorHeap.hpp that calls m_Heap.Reset().
+    // For now, doing nothing is ok as the destructor will handle it, 
+    // but explicit cleanup is better.
 }
 
 void Display::Resize(uint32_t width, uint32_t height)

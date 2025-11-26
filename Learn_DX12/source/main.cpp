@@ -28,6 +28,7 @@
 
 #include "../include/GameCore.hpp"
 #include "../include/GraphicsCore.hpp"
+#include "../include/Display.hpp"
 #include "../include/GpuResource.hpp"
 #include "../include/ColorBuffer.hpp"
 #include "../include/DepthBuffer.hpp"
@@ -76,8 +77,6 @@ class HD2D_Renderer : public Game
 public:
     HD2D_Renderer()
         : Game{L"Learn DX12 - HD 2D renderer", 1280, 720, true}
-        , m_CommandQueue{D3D12_COMMAND_LIST_TYPE_DIRECT}
-        , m_TearingSupported{CheckTearingSupport()}
         , m_UseWarp{false}
         , m_ScissorRect{CD3DX12_RECT(0, 0, LONG_MAX, LONG_MAX)}
         , m_Viewport{CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(1280), static_cast<float>(720))}
@@ -91,41 +90,8 @@ public:
         // 1. Initialize Graphics (Creates Device)
         Graphics::Initialize(m_UseWarp);
 
-        // 2. Create Command Queue (Use global device)
-        m_CommandQueue.Create(Graphics::g_Device.Get());
+        Display::Initialize();
 
-        // 3. Create Swap Chain
-        // Need to get the HWND from GameCore's SDL Window
-        HWND hwnd = (HWND)SDL_GetPointerProperty(
-            SDL_GetWindowProperties(GameCore::g_Window),
-            SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
-
-        m_SwapChain = CreateSwapChain(hwnd, m_CommandQueue, m_Width, m_Height, m_NumFrames);
-
-        // 5. Create Descriptor Heaps & RTVs
-        m_RTVHeap.Create(Graphics::g_Device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, m_NumFrames);
-        m_DSVHeap.Create(Graphics::g_Device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1);
-
-        // Create RTVs for SwapChain buffers
-        for (uint32_t i = 0; i < m_NumFrames; ++i)
-        {
-            ComPtr<ID3D12Resource> backBuffer;
-            ThrowIfFailed(m_SwapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer)));
-
-            wchar_t name[32];
-            swprintf(name, 32, L"Primary SwapChain Buffer %u", i);
-
-            // FIX: Detach() here too
-            m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Detach(), m_RTVHeap);
-
-            // clear color here too
-            m_DisplayPlane[i].SetClearColor(Color(0.4f, 0.6f, 0.9f, 1.0f));
-        }
-
-        // 6. Create Command List (not needed here after command queue abstraction)
-
-        // 7. Finish Setup
-        m_CurrentBackBufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
         m_IsInitialized = true;
 
         // ======== Load Content ============= //
@@ -133,7 +99,7 @@ public:
         // A. Create a Command List for Uploading Data
         // Later on in the engine, might have to use a separate Copy Queue, but Direct Queue works fine for now.
         // reuse m_CommandList which was closed in step 6.
-        GraphicsContext InitializeContext(m_CommandQueue);
+        GraphicsContext InitializeContext(Graphics::g_CommandQueue);
 
         // B. Upload Vertex Buffer
         ComPtr<ID3D12Resource> intermediateVertexBuffer;
@@ -187,9 +153,10 @@ public:
         m_PipelineState.SetPixelShader(pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize());
         m_PipelineState.SetRenderTargetFormat(DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_D32_FLOAT);
         m_PipelineState.Finalize(L"Main PSO");
-        
-        // I. Create Depth Buffer
-        m_DepthBuffer.Create(L"Scene Depth Buffer", m_Width, m_Height, DXGI_FORMAT_D32_FLOAT, m_DSVHeap);
+
+        // I. Create Depth Buffer & descriptorHeap for it
+        m_DSVHeap.Create(Graphics::g_Device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1);
+        m_DepthBuffer.Create(L"Scene Depth Buffer", Display::GetWidth(), Display::GetHeight(), DXGI_FORMAT_D32_FLOAT, m_DSVHeap);
 
         m_ContentLoaded = true;
 
@@ -199,8 +166,8 @@ public:
 
     virtual void Cleanup() override
     {
-        m_CommandQueue.WaitForIdle();
-        m_CommandQueue.Shutdown();
+        Graphics::g_CommandQueue.WaitForIdle();
+        Graphics::g_CommandQueue.Shutdown();
 
         Graphics::Shutdown();
     }
@@ -246,16 +213,16 @@ public:
     {
         if (!m_IsInitialized) return;
 
-        // 1. Create a Graphics Context (Allocates list automatically)
-        GraphicsContext Context(m_CommandQueue);
+        // 1. Create Context
+        GraphicsContext Context(Graphics::g_CommandQueue);
 
-        ColorBuffer& backBuffer = m_DisplayPlane[m_CurrentBackBufferIndex];
+        // 2. Get Current Back Buffer
+        ColorBuffer& backBuffer = Display::GetCurrentBuffer();
 
-        // 2. Transition Resource (Handled by Context)
+        // 3. Transition & Clear
         Context.TransitionResource(backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
         Context.TransitionResource(m_DepthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-        // 3. Clear
         Context.ClearColor(backBuffer);
         Context.ClearDepth(m_DepthBuffer);
 
@@ -285,19 +252,10 @@ public:
         Context.TransitionResource(backBuffer, D3D12_RESOURCE_STATE_PRESENT);
 
         // 10. Finish (Close & Execute)
-        uint64_t fenceValue = Context.Finish();
+        Context.Finish();
 
         // 11. Present
-        UINT syncInterval = m_VSync ? 1 : 0;
-        UINT presentFlags = (m_TearingSupported && !m_VSync) ? DXGI_PRESENT_ALLOW_TEARING : 0;
-        m_SwapChain->Present(syncInterval, presentFlags);
-
-        // 12. Update Fence Value
-        m_FrameFenceValues[m_CurrentBackBufferIndex] = fenceValue;
-        m_CurrentBackBufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
-
-        // 13. Wait for the next frame's buffer to be ready
-        m_CommandQueue.WaitForFence(m_FrameFenceValues[m_CurrentBackBufferIndex]);
+        Display::Present();
     }
 
     virtual void OnKeyDown(SDL_Keycode key) override
@@ -315,113 +273,23 @@ public:
 
     virtual void OnResize(int width, int height) override
     {
-        if (m_Width != width || m_Height != height)
+        // Check if size actually changed
+        if (Display::GetWidth() != width || Display::GetHeight() != height)
         {
-            m_Width = std::max(1, width);
-            m_Height = std::max(1, height);
+            // 1. Resize Display (SwapChain & RTVs)
+            Display::Resize(width, height);
 
-            m_CommandQueue.WaitForIdle();
-
-            // 1. Reset Swap Chain Buffers
-            for (int i = 0; i < m_NumFrames; ++i)
-            {
-                m_DisplayPlane[i].Destroy();
-                m_FrameFenceValues[i] = m_CommandQueue.GetLastCompletedFenceValue();
-            }
-
-            // 2. Resize Swap Chain
-            DXGI_SWAP_CHAIN_DESC swapChainDesc = {};
-            m_SwapChain->GetDesc(&swapChainDesc);
-            m_SwapChain->ResizeBuffers(m_NumFrames, m_Width, m_Height,
-                swapChainDesc.BufferDesc.Format, swapChainDesc.Flags);
-
-            m_CurrentBackBufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
-
-            for (uint32_t i = 0; i < m_NumFrames; ++i)
-            {
-                ComPtr<ID3D12Resource> backBuffer;
-                ThrowIfFailed(m_SwapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer)));
-
-                wchar_t name[32];
-                swprintf(name, 32, L"Primary SwapChain Buffer %u", i);
-
-                // FIX: Detach() transfers ownership to CreateFromSwapChain -> AssociateWithResource
-                m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Detach(), m_RTVHeap);
-
-                // Set a clear color
-                m_DisplayPlane[i].SetClearColor(Color(0.4f, 0.6f, 0.9f, 1.0f));
-            }
-
-            // 3. Update Viewport 
-            m_Viewport = CD3DX12_VIEWPORT(0.0f, 0.0f,
-                static_cast<float>(width), static_cast<float>(height));
-
-            // 4. Resize Depth Buffer 
+            // 2. Resize Depth Buffer 
             m_DepthBuffer.Destroy();
             m_DepthBuffer.Create(L"Scene Depth Buffer", width, height, DXGI_FORMAT_D32_FLOAT, m_DSVHeap);
+
+            // 3. Update Viewport
+            m_Viewport = CD3DX12_VIEWPORT(0.0f, 0.0f, (float)width, (float)height);
         }
     }
 
 private:
     // ------------------- Helper Functions ------------------- //
-    ComPtr<IDXGISwapChain4> CreateSwapChain(HWND hWnd, CommandQueue& commandQueue, uint32_t width, uint32_t height, uint32_t bufferCount)
-    {
-        ComPtr<IDXGISwapChain4> dxgiSwapChain4;
-        ComPtr<IDXGIFactory4> dxgiFactory4;
-        UINT createFactoryFlags = 0;
-#if defined(_DEBUG)
-        createFactoryFlags = DXGI_CREATE_FACTORY_DEBUG;
-#endif
-
-        ThrowIfFailed(CreateDXGIFactory2(createFactoryFlags, IID_PPV_ARGS(&dxgiFactory4)));
-
-        DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
-        swapChainDesc.Width = width;
-        swapChainDesc.Height = height;
-        swapChainDesc.Format = DXGI_FORMAT_R10G10B10A2_UNORM;    // 10-bit HDR color-space
-        swapChainDesc.Stereo = FALSE;
-        swapChainDesc.SampleDesc = { 1, 0 };
-        swapChainDesc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        swapChainDesc.BufferCount = bufferCount;
-        swapChainDesc.Scaling = DXGI_SCALING_STRETCH;
-        swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-        swapChainDesc.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
-        swapChainDesc.Flags = CheckTearingSupport() ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0; 
-
-        ComPtr<IDXGISwapChain1> swapChain1;
-        ThrowIfFailed(dxgiFactory4->CreateSwapChainForHwnd(
-            commandQueue.GetCommandQueue(), hWnd, &swapChainDesc, nullptr, nullptr, &swapChain1));
-
-        ThrowIfFailed(dxgiFactory4->MakeWindowAssociation(hWnd, DXGI_MWA_NO_ALT_ENTER));
-        ThrowIfFailed(swapChain1.As(&dxgiSwapChain4));
-        return dxgiSwapChain4;
-    }
-
-    bool CheckTearingSupport()
-    {
-        BOOL allowTearing = FALSE;
-
-        // Rather than create the DXGI 1.5 factory interface directly, we create the
-        // DXGI 1.4 interface and query for the 1.5 interface. This is to enable the 
-        // graphics debugging tools which will not support the 1.5 factory interface 
-        // until a future update.
-        ComPtr<IDXGIFactory4> factory4;
-        if (SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory4))))
-        {
-            ComPtr<IDXGIFactory5> factory5;
-            if (SUCCEEDED(factory4.As(&factory5)))
-            {
-                if (FAILED(factory5->CheckFeatureSupport(
-                    DXGI_FEATURE_PRESENT_ALLOW_TEARING,
-                    &allowTearing, sizeof(allowTearing))))
-                {
-                    allowTearing = FALSE;
-                }
-            }
-        }
-
-        return allowTearing == TRUE;
-    }
 
     // --- Helper to Upload Data to GPU ---
     // MiniEngine handles this in CommandContext::InitializeBuffer
@@ -479,19 +347,9 @@ private:
 private:
     static const uint8_t m_NumFrames = 3;
     bool m_IsInitialized = false;
-    bool m_TearingSupported{}; // Initialize in Constructor
     bool m_UseWarp;     // Windows Advanced Rasterization Platform (For software rasterization)
 
-    CommandQueue m_CommandQueue;
-    ComPtr<IDXGISwapChain4> m_SwapChain;
-    
-   
-    ColorBuffer m_DisplayPlane[m_NumFrames];
-    DescriptorHeap m_RTVHeap;
     DescriptorHeap m_DSVHeap;
-
-    UINT m_CurrentBackBufferIndex;
-    uint64_t m_FrameFenceValues[m_NumFrames] = {};
 
     // =========== Data Members for Geometry Rendering  =================== //
     // --- Pipeline Objects ---
