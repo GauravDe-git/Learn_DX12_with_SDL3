@@ -97,7 +97,9 @@
     <ClCompile Include="source\GameCore.cpp" />
     <ClCompile Include="source\GraphicsCore.cpp" />
     <ClCompile Include="source\main.cpp" />
+    <ClCompile Include="source\PipelineState.cpp" />
     <ClCompile Include="source\PixelBuffer.cpp" />
+    <ClCompile Include="source\RootSingature.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\ColorBuffer.hpp" />
@@ -109,7 +111,9 @@
     <ClInclude Include="include\GpuResource.hpp" />
     <ClInclude Include="include\GraphicsCore.hpp" />
     <ClInclude Include="include\helpers.hpp" />
+    <ClInclude Include="include\PipelineState.hpp" />
     <ClInclude Include="include\PixelBuffer.hpp" />
+    <ClInclude Include="include\RootSignature.hpp" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shaders\PixelShader.hlsl">
