@@ -32,6 +32,8 @@
 #include "../include/ColorBuffer.hpp"
 #include "../include/DepthBuffer.hpp"
 #include "../include/DescriptorHeap.hpp"
+#include "../include/RootSignature.hpp"
+#include "../include/PipelineState.hpp"
 
 // --- Namespaces ---
 using namespace Microsoft::WRL; // For ComPtr
@@ -175,77 +177,19 @@ public:
         };
 
         // G. Create Root Signature
-
-        // 1. Check Feature Support
-        D3D12_FEATURE_DATA_ROOT_SIGNATURE featureData = {};
-        featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_1;
-        if (FAILED(Graphics::g_Device->CheckFeatureSupport(D3D12_FEATURE_ROOT_SIGNATURE, &featureData, sizeof(featureData))))
-        {
-            featureData.HighestVersion = D3D_ROOT_SIGNATURE_VERSION_1_0;
-        }
-
-        // 2. Define Flags
-        D3D12_ROOT_SIGNATURE_FLAGS rootSignatureFlags =
-            D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
-            D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
-            D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
-            D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS |
-            D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS;
-
-        // 3. Define Root Parameters (1 Constant Buffer for MVP Matrix)
-        CD3DX12_ROOT_PARAMETER1 rootParameters[1];
-        // 16 floats (matrix) / 4 bytes = size in 32-bit values
-        // Register b0, Space 0, Visible to Vertex Shader
-        rootParameters[0].InitAsConstants(sizeof(XMMATRIX) / 4, 0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
-
-        // 4. Create Description
-        CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC rootSignatureDescription;
-        rootSignatureDescription.Init_1_1(_countof(rootParameters), rootParameters, 0, nullptr, rootSignatureFlags);
-
-        // 5. Serialize and Create
-        ComPtr<ID3DBlob> rootSignatureBlob;
-        ComPtr<ID3DBlob> errorBlob;
-        ThrowIfFailed(D3DX12SerializeVersionedRootSignature(&rootSignatureDescription,
-            featureData.HighestVersion, &rootSignatureBlob, &errorBlob));
-
-        ThrowIfFailed(Graphics::g_Device->CreateRootSignature(0, rootSignatureBlob->GetBufferPointer(),
-            rootSignatureBlob->GetBufferSize(), IID_PPV_ARGS(&m_RootSignature)));
+        m_RootSignature.Reset(1, 0);
+        m_RootSignature.InitAsConstants(0, sizeof(XMMATRIX) / 4, 0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+        m_RootSignature.Finalize(L"Main Root Sig", D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         // H. Create Pipeline State Object (PSO)
-
-        // 1. Define the Pipeline State Stream Structure
-        // (This struct matches the layout expected by D3D12 for a stream)
-        struct PipelineStateStream
-        {
-            CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE pRootSignature;
-            CD3DX12_PIPELINE_STATE_STREAM_INPUT_LAYOUT InputLayout;
-            CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY PrimitiveTopologyType;
-            CD3DX12_PIPELINE_STATE_STREAM_VS VS;
-            CD3DX12_PIPELINE_STATE_STREAM_PS PS;
-            CD3DX12_PIPELINE_STATE_STREAM_DEPTH_STENCIL_FORMAT DSVFormat;
-            CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS RTVFormats;
-        } pipelineStateStream;
-
-        // 2. Define RTV Formats
-        D3D12_RT_FORMAT_ARRAY rtvFormats = {};
-        rtvFormats.NumRenderTargets = 1;
-        rtvFormats.RTFormats[0] = DXGI_FORMAT_R10G10B10A2_UNORM; // Matches SwapChain format
-
-        // 3. Fill the Stream
-        pipelineStateStream.pRootSignature = m_RootSignature.Get();
-        pipelineStateStream.InputLayout = { inputLayout, _countof(inputLayout) };
-        pipelineStateStream.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-        pipelineStateStream.VS = CD3DX12_SHADER_BYTECODE(vertexShaderBlob.Get());
-        pipelineStateStream.PS = CD3DX12_SHADER_BYTECODE(pixelShaderBlob.Get());
-        pipelineStateStream.DSVFormat = DXGI_FORMAT_D32_FLOAT;
-        pipelineStateStream.RTVFormats = rtvFormats;
-
-        // 4. Create the PSO
-        D3D12_PIPELINE_STATE_STREAM_DESC pipelineStateStreamDesc = {
-            sizeof(PipelineStateStream), &pipelineStateStream
-        };
-        ThrowIfFailed(Graphics::g_Device->CreatePipelineState(&pipelineStateStreamDesc, IID_PPV_ARGS(&m_PipelineState)));
-
+        m_PipelineState.SetRootSignature(m_RootSignature);
+        m_PipelineState.SetInputLayout(std::vector<D3D12_INPUT_ELEMENT_DESC>(inputLayout, inputLayout + _countof(inputLayout)));
+        m_PipelineState.SetPrimitiveTopologyType(D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE);
+        m_PipelineState.SetVertexShader(vertexShaderBlob->GetBufferPointer(), vertexShaderBlob->GetBufferSize());
+        m_PipelineState.SetPixelShader(pixelShaderBlob->GetBufferPointer(), pixelShaderBlob->GetBufferSize());
+        m_PipelineState.SetRenderTargetFormat(DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_D32_FLOAT);
+        m_PipelineState.Finalize(L"Main PSO");
+        
         // I. Create Depth Buffer
         m_DepthBuffer.Create(L"Scene Depth Buffer", m_Width, m_Height, DXGI_FORMAT_D32_FLOAT, m_DSVHeap);
 
@@ -317,7 +261,7 @@ public:
         m_CommandQueue.WaitForFence(m_FrameFenceValues[m_CurrentBackBufferIndex]);
 
         // 3. Reset command List
-        m_CommandList->Reset(allocator, m_PipelineState.Get()); // <--- Bind PSO here!
+        m_CommandList->Reset(allocator, m_PipelineState.GetPipelineStateObject()); // bind pso here
 
         ColorBuffer& backBuffer = m_DisplayPlane[m_CurrentBackBufferIndex];
         D3D12_CPU_DESCRIPTOR_HANDLE rtv = backBuffer.GetRTV();
@@ -334,7 +278,7 @@ public:
         ClearDepth(m_CommandList, dsv);
 
         // C. Set Root Signature
-        m_CommandList->SetGraphicsRootSignature(m_RootSignature.Get());
+        m_CommandList->SetGraphicsRootSignature(m_RootSignature.GetSignature());
 
         // D. Setup Input Assembler
         m_CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -599,8 +543,8 @@ private:
 
     // =========== Data Members for Geometry Rendering  =================== //
     // --- Pipeline Objects ---
-    ComPtr<ID3D12RootSignature> m_RootSignature;
-    ComPtr<ID3D12PipelineState> m_PipelineState;
+    RootSignature m_RootSignature;
+    GraphicsPipelineState m_PipelineState;
 
     // --- Data Buffers ---
     GpuResource m_VertexBuffer;  
