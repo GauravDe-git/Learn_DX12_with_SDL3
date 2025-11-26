@@ -66,9 +66,10 @@ class HD2D_Renderer : public Game
 {
 public:
     HD2D_Renderer()
-        : Game(L"Learn DX12 - HD 2D renderer", 1280, 720, true)
-        , m_CommandQueue(D3D12_COMMAND_LIST_TYPE_DIRECT)
-        , m_UseWrap{false}
+        : Game{L"Learn DX12 - HD 2D renderer", 1280, 720, true}
+        , m_CommandQueue{D3D12_COMMAND_LIST_TYPE_DIRECT}
+        , m_TearingSupported{CheckTearingSupport()}
+        , m_UseWarp{false}
         , m_ScissorRect{CD3DX12_RECT(0, 0, LONG_MAX, LONG_MAX)}
         , m_Viewport{CD3DX12_VIEWPORT(0.0f, 0.0f, static_cast<float>(1280), static_cast<float>(720))}
         , m_FoV{45.0f} 
@@ -88,7 +89,7 @@ public:
 #endif
 
         // 2. Create Device
-        ComPtr<IDXGIAdapter4> adapter = GetAdapter(m_UseWrap); // can fall back to software rasterizer?
+        ComPtr<IDXGIAdapter4> adapter = GetAdapter(m_UseWarp); // can fall back to software rasterizer?
         ThrowIfFailed(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&m_Device)));
 
         // 3. Create Command Queue
@@ -652,8 +653,8 @@ private:
 private:
     static const uint8_t m_NumFrames = 3;
     bool m_IsInitialized = false;
-    bool m_TearingSupported = CheckTearingSupport();
-    bool m_UseWrap;     //For software rasterization?
+    bool m_TearingSupported{}; // Initialize in Constructor
+    bool m_UseWarp;     // Windows Advanced Rasterization Platform (For software rasterization)
 
     CommandQueue m_CommandQueue;
     ComPtr<ID3D12Device2> m_Device;
