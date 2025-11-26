@@ -29,6 +29,9 @@
 #include "../include/GameCore.hpp"
 #include "../include/GraphicsCore.hpp"
 #include "../include/GpuResource.hpp"
+#include "../include/ColorBuffer.hpp"
+#include "../include/DepthBuffer.hpp"
+#include "../include/DescriptorHeap.hpp"
 
 // --- Namespaces ---
 using namespace Microsoft::WRL; // For ComPtr
@@ -96,9 +99,24 @@ public:
         m_SwapChain = CreateSwapChain(hwnd, m_CommandQueue, m_Width, m_Height, m_NumFrames);
 
         // 5. Create Descriptor Heaps & RTVs
-        m_RTVDescriptorHeap = CreateDescriptorHeap(Graphics::g_Device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, m_NumFrames);
-        m_RTVDescriptorSize = Graphics::g_Device.Get()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        UpdateRenderTargetViews(Graphics::g_Device.Get(), m_SwapChain, m_RTVDescriptorHeap);
+        m_RTVHeap.Create(Graphics::g_Device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV, m_NumFrames);
+        m_DSVHeap.Create(Graphics::g_Device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1);
+
+        // Create RTVs for SwapChain buffers
+        for (uint32_t i = 0; i < m_NumFrames; ++i)
+        {
+            ComPtr<ID3D12Resource> backBuffer;
+            ThrowIfFailed(m_SwapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer)));
+
+            wchar_t name[32];
+            swprintf(name, 32, L"Primary SwapChain Buffer %u", i);
+
+            // FIX: Detach() here too
+            m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Detach(), m_RTVHeap);
+
+            // This helper handles RTV creation internally
+            //m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Get(), m_RTVHeap);
+        }
 
         // 6. Create Command List
         ID3D12CommandAllocator* allocator = m_CommandQueue.RequestAllocator();
@@ -139,12 +157,7 @@ public:
         m_IndexBufferView.Format = DXGI_FORMAT_R16_UINT;
         m_IndexBufferView.SizeInBytes = sizeof(g_Indicies);
 
-        // D. Create DSV Descriptor Heap
-        D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
-        dsvHeapDesc.NumDescriptors = 1;
-        dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-        dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        ThrowIfFailed(Graphics::g_Device.Get()->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&m_DSVHeap)));
+        // D. Create DSV Descriptor Heap (Already done in 5.)
 
         // E. Load Shaders
         // (This expects VertexShader.cso and PixelShader.cso to be in the same folder as the executable.)
@@ -234,7 +247,7 @@ public:
         ThrowIfFailed(Graphics::g_Device->CreatePipelineState(&pipelineStateStreamDesc, IID_PPV_ARGS(&m_PipelineState)));
 
         // I. Create Depth Buffer
-        ResizeDepthBuffer(m_Width, m_Height);
+        m_DepthBuffer.Create(L"Scene Depth Buffer", m_Width, m_Height, DXGI_FORMAT_D32_FLOAT, m_DSVHeap);
 
         m_ContentLoaded = true;
 
@@ -306,10 +319,9 @@ public:
         // 3. Reset command List
         m_CommandList->Reset(allocator, m_PipelineState.Get()); // <--- Bind PSO here!
 
-        auto backBuffer = m_BackBuffers[m_CurrentBackBufferIndex];
-        auto rtv = CD3DX12_CPU_DESCRIPTOR_HANDLE(m_RTVDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
-            m_CurrentBackBufferIndex, m_RTVDescriptorSize);
-        auto dsv = m_DSVHeap->GetCPUDescriptorHandleForHeapStart();
+        ColorBuffer& backBuffer = m_DisplayPlane[m_CurrentBackBufferIndex];
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = backBuffer.GetRTV();
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv = m_DepthBuffer.GetDSV();
 
         // -- RECORD COMMANDS -- //
 
@@ -386,7 +398,7 @@ public:
             // 1. Reset Swap Chain Buffers
             for (int i = 0; i < m_NumFrames; ++i)
             {
-                m_BackBuffers[i].Destroy();
+                m_DisplayPlane[i].Destroy();
                 m_FrameFenceValues[i] = m_CommandQueue.GetLastCompletedFenceValue();
             }
 
@@ -397,14 +409,28 @@ public:
                 swapChainDesc.BufferDesc.Format, swapChainDesc.Flags);
 
             m_CurrentBackBufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
-            UpdateRenderTargetViews(Graphics::g_Device.Get(), m_SwapChain, m_RTVDescriptorHeap);
+
+            for (uint32_t i = 0; i < m_NumFrames; ++i)
+            {
+                ComPtr<ID3D12Resource> backBuffer;
+                ThrowIfFailed(m_SwapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer)));
+
+                wchar_t name[32];
+                swprintf(name, 32, L"Primary SwapChain Buffer %u", i);
+
+                // FIX: Detach() transfers ownership to CreateFromSwapChain -> AssociateWithResource
+                m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Detach(), m_RTVHeap);
+
+                //m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Get(), m_RTVHeap);
+            }
 
             // 3. Update Viewport 
             m_Viewport = CD3DX12_VIEWPORT(0.0f, 0.0f,
                 static_cast<float>(width), static_cast<float>(height));
 
             // 4. Resize Depth Buffer 
-            ResizeDepthBuffer(width, height);
+            m_DepthBuffer.Destroy();
+            m_DepthBuffer.Create(L"Scene Depth Buffer", width, height, DXGI_FORMAT_D32_FLOAT, m_DSVHeap);
         }
     }
 
@@ -443,31 +469,6 @@ private:
         return dxgiSwapChain4;
     }
 
-    ComPtr<ID3D12DescriptorHeap> CreateDescriptorHeap(ComPtr<ID3D12Device2> device, D3D12_DESCRIPTOR_HEAP_TYPE type, uint32_t numDescriptors)
-    {
-        ComPtr<ID3D12DescriptorHeap> descriptorHeap;
-        D3D12_DESCRIPTOR_HEAP_DESC desc = {};
-        desc.NumDescriptors = numDescriptors;
-        desc.Type = type;
-        ThrowIfFailed(device->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&descriptorHeap)));
-        return descriptorHeap;
-    }
-
-    void UpdateRenderTargetViews(ComPtr<ID3D12Device2> device, ComPtr<IDXGISwapChain4> swapChain, ComPtr<ID3D12DescriptorHeap> descriptorHeap)
-    {
-        auto rtvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
-        CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(descriptorHeap->GetCPUDescriptorHandleForHeapStart());
-
-        for (int i = 0; i < m_NumFrames; ++i)
-        {
-            ComPtr<ID3D12Resource> backBuffer;
-            ThrowIfFailed(swapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer)));
-            Graphics::g_Device->CreateRenderTargetView(backBuffer.Get(), nullptr, rtvHandle);
-            m_BackBuffers[i].SetResource(backBuffer.Get(), D3D12_RESOURCE_STATE_PRESENT);   //m_BackBuffers[i] = backBuffer;
-            rtvHandle.Offset(rtvDescriptorSize);
-        }
-    }
-
     bool CheckTearingSupport()
     {
         BOOL allowTearing = FALSE;
@@ -498,14 +499,6 @@ private:
     // In MiniEngine, these live in the CommandContext class.
     // I implement them here for now, but will move them later.
 
-    /*void TransitionResource(ComPtr<ID3D12GraphicsCommandList> cmdList,
-        ComPtr<ID3D12Resource> resource,
-        D3D12_RESOURCE_STATES beforeState, D3D12_RESOURCE_STATES afterState)
-    {
-        CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-            resource.Get(), beforeState, afterState);
-        cmdList->ResourceBarrier(1, &barrier);
-    }*/
     void TransitionResource(ComPtr<ID3D12GraphicsCommandList> cmdList,
         GpuResource& resource, D3D12_RESOURCE_STATES newState)
     {
@@ -587,49 +580,6 @@ private:
         }
     }
 
-    void ResizeDepthBuffer(int width, int height)
-    {
-        if (m_IsInitialized)
-        {
-            // Flush any GPU commands that might be referencing the depth buffer.
-            m_CommandQueue.WaitForIdle();
-
-            width = std::max(1, width);
-            height = std::max(1, height);
-
-            // Resize screen dependent resources.
-            // Create a depth buffer.
-            D3D12_CLEAR_VALUE optimizedClearValue = {};
-            optimizedClearValue.Format = DXGI_FORMAT_D32_FLOAT;
-            optimizedClearValue.DepthStencil = { 1.0f, 0 };
-
-            auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-            auto texDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_D32_FLOAT, width, height,
-                1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
-
-            ThrowIfFailed(Graphics::g_Device.Get()->CreateCommittedResource(
-                &heapProps,
-                D3D12_HEAP_FLAG_NONE,
-                &texDesc,
-                D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                &optimizedClearValue,
-                IID_PPV_ARGS(m_DepthBuffer.GetAddressOf())
-            ));
-
-            m_DepthBuffer.SetUsageState(D3D12_RESOURCE_STATE_DEPTH_WRITE);
-
-            // Update the depth-stencil view.
-            D3D12_DEPTH_STENCIL_VIEW_DESC dsv = {};
-            dsv.Format = DXGI_FORMAT_D32_FLOAT;
-            dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
-            dsv.Texture2D.MipSlice = 0;
-            dsv.Flags = D3D12_DSV_FLAG_NONE;
-
-            Graphics::g_Device.Get()->CreateDepthStencilView(m_DepthBuffer.GetResource(), &dsv,
-                m_DSVHeap->GetCPUDescriptorHandleForHeapStart());
-        }
-    }
-
 private:
     static const uint8_t m_NumFrames = 3;
     bool m_IsInitialized = false;
@@ -638,10 +588,12 @@ private:
 
     CommandQueue m_CommandQueue;
     ComPtr<IDXGISwapChain4> m_SwapChain;
-    GpuResource m_BackBuffers[m_NumFrames]; //ComPtr<ID3D12Resource> m_BackBuffers[m_NumFrames];
     ComPtr<ID3D12GraphicsCommandList> m_CommandList;
-    ComPtr<ID3D12DescriptorHeap> m_RTVDescriptorHeap;
-    UINT m_RTVDescriptorSize;
+   
+    ColorBuffer m_DisplayPlane[m_NumFrames];
+    DescriptorHeap m_RTVHeap;
+    DescriptorHeap m_DSVHeap;
+
     UINT m_CurrentBackBufferIndex;
     uint64_t m_FrameFenceValues[m_NumFrames] = {};
 
@@ -651,15 +603,14 @@ private:
     ComPtr<ID3D12PipelineState> m_PipelineState;
 
     // --- Data Buffers ---
-    GpuResource m_VertexBuffer;  //ComPtr<ID3D12Resource> m_VertexBuffer;
+    GpuResource m_VertexBuffer;  
     D3D12_VERTEX_BUFFER_VIEW m_VertexBufferView;
 
-    GpuResource m_IndexBuffer;  //ComPtr<ID3D12Resource> m_IndexBuffer;
+    GpuResource m_IndexBuffer;  
     D3D12_INDEX_BUFFER_VIEW m_IndexBufferView;
 
     // --- Depth Buffer ---
-    GpuResource m_DepthBuffer; //ComPtr<ID3D12Resource> m_DepthBuffer;
-    ComPtr<ID3D12DescriptorHeap> m_DSVHeap;
+    DepthBuffer m_DepthBuffer;
 
     // --- Viewport & Scissor ---
     D3D12_VIEWPORT m_Viewport;

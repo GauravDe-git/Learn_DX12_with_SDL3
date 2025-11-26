@@ -1,5 +1,4 @@
 #include "../include/ColorBuffer.hpp"
-#include "../include/ColorBuffer.hpp"
 #include "../include/GraphicsCore.hpp"
 
 // Helper macro for unused parameters
@@ -91,7 +90,13 @@ void ColorBuffer::CreateFromSwapChain(const std::wstring& Name, ID3D12Resource* 
 {
     AssociateWithResource(Name, BaseResource, D3D12_RESOURCE_STATE_PRESENT);
 
-    m_RTVHandle = RTVHeap.Alloc(1);
+    // FIX: Only allocate a new handle if we don't already have one!
+    // This allows us to reuse the existing heap slot during Resize.
+    if (m_RTVHandle.ptr == D3D12_GPU_VIRTUAL_ADDRESS_UNKNOWN)
+    {
+        m_RTVHandle = RTVHeap.Alloc(1);
+    }
+
     Graphics::g_Device->CreateRenderTargetView(m_pResource.Get(), nullptr, m_RTVHandle);
 }
 
