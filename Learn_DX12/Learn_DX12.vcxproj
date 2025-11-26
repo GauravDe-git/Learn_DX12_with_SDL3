@@ -95,6 +95,7 @@
     <ClCompile Include="source\CommandQueue.cpp" />
     <ClCompile Include="source\DepthBuffer.cpp" />
     <ClCompile Include="source\DescriptorHeap.cpp" />
+    <ClCompile Include="source\Display.cpp" />
     <ClCompile Include="source\GameCore.cpp" />
     <ClCompile Include="source\GraphicsCore.cpp" />
     <ClCompile Include="source\main.cpp" />
@@ -109,6 +110,7 @@
     <ClInclude Include="include\CommandQueue.hpp" />
     <ClInclude Include="include\DepthBuffer.hpp" />
     <ClInclude Include="include\DescriptorHeap.hpp" />
+    <ClInclude Include="include\Display.hpp" />
     <ClInclude Include="include\GameCore.hpp" />
     <ClInclude Include="include\GpuResource.hpp" />
     <ClInclude Include="include\GraphicsCore.hpp" />

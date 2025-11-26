@@ -10,6 +10,8 @@ namespace Graphics
 {
     ComPtr<ID3D12Device2> g_Device = nullptr;
 
+    CommandQueue g_CommandQueue(D3D12_COMMAND_LIST_TYPE_DIRECT);
+
     // Helper to get the adapter (moved from main.cpp)
     ComPtr<IDXGIAdapter4> GetAdapter(bool useWarp)
     {
@@ -62,10 +64,16 @@ namespace Graphics
         // 2. Create Device
         ComPtr<IDXGIAdapter4> adapter = GetAdapter(useWarp);
         ThrowIfFailed(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&g_Device)));
+
+        // Initialize the Command Queue 
+        g_CommandQueue.Create(g_Device.Get());
     }
 
     void Shutdown()
     {
+        // Shut command_queue down before destroying the device
+        g_CommandQueue.Shutdown();
+
         g_Device.Reset();
     }
 }
