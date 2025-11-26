@@ -35,6 +35,8 @@
 #include "../include/RootSignature.hpp"
 #include "../include/PipelineState.hpp"
 
+#include "../include/CommandContext.hpp"
+
 // --- Namespaces ---
 using namespace Microsoft::WRL; // For ComPtr
 using namespace DirectX;    //temporariliy put the directx namespace here for the dxmath
@@ -116,15 +118,11 @@ public:
             // FIX: Detach() here too
             m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Detach(), m_RTVHeap);
 
-            // This helper handles RTV creation internally
-            //m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Get(), m_RTVHeap);
+            // clear color here too
+            m_DisplayPlane[i].SetClearColor(Color(0.4f, 0.6f, 0.9f, 1.0f));
         }
 
-        // 6. Create Command List
-        ID3D12CommandAllocator* allocator = m_CommandQueue.RequestAllocator();
-        ThrowIfFailed(Graphics::g_Device.Get()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr, IID_PPV_ARGS(&m_CommandList)));
-        ThrowIfFailed(m_CommandList->Close());
-        m_CommandQueue.DiscardAllocator(0, allocator);
+        // 6. Create Command List (not needed here after command queue abstraction)
 
         // 7. Finish Setup
         m_CurrentBackBufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
@@ -135,11 +133,11 @@ public:
         // A. Create a Command List for Uploading Data
         // Later on in the engine, might have to use a separate Copy Queue, but Direct Queue works fine for now.
         // reuse m_CommandList which was closed in step 6.
-        ThrowIfFailed(m_CommandList->Reset(m_CommandQueue.RequestAllocator(), nullptr));
+        GraphicsContext InitializeContext(m_CommandQueue);
 
         // B. Upload Vertex Buffer
         ComPtr<ID3D12Resource> intermediateVertexBuffer;
-        UpdateBufferResource(m_CommandList.Get(),
+        UpdateBufferResource(InitializeContext,
             m_VertexBuffer, &intermediateVertexBuffer,
             _countof(g_Vertices), sizeof(VertexPosColor), g_Vertices);
 
@@ -150,7 +148,7 @@ public:
 
         // C. Upload Index Buffer
         ComPtr<ID3D12Resource> intermediateIndexBuffer;
-        UpdateBufferResource(m_CommandList.Get(),
+        UpdateBufferResource(InitializeContext,
             m_IndexBuffer, &intermediateIndexBuffer,
             _countof(g_Indicies), sizeof(WORD), g_Indicies);
 
@@ -195,13 +193,8 @@ public:
 
         m_ContentLoaded = true;
 
-        // ExecuteCommandList: to close it automatically
-        m_CommandQueue.ExecuteCommandList(m_CommandList.Get());
-
-        // Wait for the upload to finish before we delete the intermediate buffers
-        // (The ComPtrs 'intermediateVertexBuffer' and 'intermediateIndexBuffer' will be destroyed
-        // at the end of this function, so the GPU must be done with them by then.)
-        m_CommandQueue.WaitForIdle();
+        // Finish and Execute Command List
+        InitializeContext.Finish(true); // true = Wait for completion (so we can safely delete intermediate buffers)
     }
 
     virtual void Cleanup() override
@@ -253,68 +246,58 @@ public:
     {
         if (!m_IsInitialized) return;
 
-        // 1. Request an Allocator 
-        ID3D12CommandAllocator* allocator = m_CommandQueue.RequestAllocator();
-
-        // 2. Wait for Previous Frame
-        // (Wait for the GPU to finish with the command allocator for this frame index)
-        m_CommandQueue.WaitForFence(m_FrameFenceValues[m_CurrentBackBufferIndex]);
-
-        // 3. Reset command List
-        m_CommandList->Reset(allocator, m_PipelineState.GetPipelineStateObject()); // bind pso here
+        // 1. Create a Graphics Context (Allocates list automatically)
+        GraphicsContext Context(m_CommandQueue);
 
         ColorBuffer& backBuffer = m_DisplayPlane[m_CurrentBackBufferIndex];
-        D3D12_CPU_DESCRIPTOR_HANDLE rtv = backBuffer.GetRTV();
-        D3D12_CPU_DESCRIPTOR_HANDLE dsv = m_DepthBuffer.GetDSV();
 
-        // -- RECORD COMMANDS -- //
+        // 2. Transition Resource (Handled by Context)
+        Context.TransitionResource(backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        Context.TransitionResource(m_DepthBuffer, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-        // A. Transition to Render Target
-        TransitionResource(m_CommandList, backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        // 3. Clear
+        Context.ClearColor(backBuffer);
+        Context.ClearDepth(m_DepthBuffer);
 
-        // B. Clear RTV & DSV
-        FLOAT clearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
-        ClearRTV(m_CommandList, rtv, clearColor);
-        ClearDepth(m_CommandList, dsv);
+        // 4. Set State
+        Context.SetRootSignature(m_RootSignature);
+        Context.SetPipelineState(m_PipelineState);
+        Context.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        Context.SetViewport(m_Viewport);
+        Context.SetScissor(m_ScissorRect);
 
-        // C. Set Root Signature
-        m_CommandList->SetGraphicsRootSignature(m_RootSignature.GetSignature());
+        // 5. Bind Targets
+        Context.SetRenderTarget(backBuffer.GetRTV(), m_DepthBuffer.GetDSV());
 
-        // D. Setup Input Assembler
-        m_CommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        m_CommandList->IASetVertexBuffers(0, 1, &m_VertexBufferView);
-        m_CommandList->IASetIndexBuffer(&m_IndexBufferView);
+        // 6. Bind Buffers
+        Context.SetVertexBuffer(0, m_VertexBufferView);
+        Context.SetIndexBuffer(m_IndexBufferView);
 
-        // E. Setup Rasterizer State
-        m_CommandList->RSSetViewports(1, &m_Viewport);
-        m_CommandList->RSSetScissorRects(1, &m_ScissorRect);
-
-        // F. Bind Render Targets
-        m_CommandList->OMSetRenderTargets(1, &rtv, FALSE, &dsv);
-
-        // G. Update Root Parameters (MVP Matrix)
+        // 7. Update Constants
         XMMATRIX mvpMatrix = XMMatrixMultiply(m_ModelMatrix, m_ViewMatrix);
         mvpMatrix = XMMatrixMultiply(mvpMatrix, m_ProjectionMatrix);
-        m_CommandList->SetGraphicsRoot32BitConstants(0, sizeof(XMMATRIX) / 4, &mvpMatrix, 0);
+        Context.SetConstants(0, sizeof(XMMATRIX) / 4, &mvpMatrix);
 
-        // H. Draw
-        m_CommandList->DrawIndexedInstanced(_countof(g_Indicies), 1, 0, 0, 0);
+        // 8. Draw
+        Context.DrawIndexed(_countof(g_Indicies));
 
-        // I. Transition to Present
-        TransitionResource(m_CommandList, backBuffer, D3D12_RESOURCE_STATE_PRESENT);
+        // 9. Transition to Present
+        Context.TransitionResource(backBuffer, D3D12_RESOURCE_STATE_PRESENT);
 
-        // Execute (CommandQueue closes the list automatically)
-        uint64_t fenceValue = m_CommandQueue.ExecuteCommandList(m_CommandList.Get());
+        // 10. Finish (Close & Execute)
+        uint64_t fenceValue = Context.Finish();
 
-        // Present
+        // 11. Present
         UINT syncInterval = m_VSync ? 1 : 0;
         UINT presentFlags = (m_TearingSupported && !m_VSync) ? DXGI_PRESENT_ALLOW_TEARING : 0;
         m_SwapChain->Present(syncInterval, presentFlags);
 
-        // Cleanup
-        m_CommandQueue.DiscardAllocator(fenceValue, allocator);
+        // 12. Update Fence Value
         m_FrameFenceValues[m_CurrentBackBufferIndex] = fenceValue;
         m_CurrentBackBufferIndex = m_SwapChain->GetCurrentBackBufferIndex();
+
+        // 13. Wait for the next frame's buffer to be ready
+        m_CommandQueue.WaitForFence(m_FrameFenceValues[m_CurrentBackBufferIndex]);
     }
 
     virtual void OnKeyDown(SDL_Keycode key) override
@@ -365,7 +348,8 @@ public:
                 // FIX: Detach() transfers ownership to CreateFromSwapChain -> AssociateWithResource
                 m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Detach(), m_RTVHeap);
 
-                //m_DisplayPlane[i].CreateFromSwapChain(name, backBuffer.Get(), m_RTVHeap);
+                // Set a clear color
+                m_DisplayPlane[i].SetClearColor(Color(0.4f, 0.6f, 0.9f, 1.0f));
             }
 
             // 3. Update Viewport 
@@ -439,42 +423,10 @@ private:
         return allowTearing == TRUE;
     }
 
-    // --- GraphicsContext Helpers (MiniEngine Style) ---
-    // In MiniEngine, these live in the CommandContext class.
-    // I implement them here for now, but will move them later.
-
-    void TransitionResource(ComPtr<ID3D12GraphicsCommandList> cmdList,
-        GpuResource& resource, D3D12_RESOURCE_STATES newState)
-    {
-        D3D12_RESOURCE_STATES oldState = resource.GetUsageState();
-
-        if (oldState != newState)
-        {
-            CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-                resource.GetResource(), oldState, newState);
-            cmdList->ResourceBarrier(1, &barrier);
-
-            // Update the state tracking
-            resource.SetUsageState(newState);
-        }
-    }
-
-    void ClearRTV(ComPtr<ID3D12GraphicsCommandList> cmdList,
-        D3D12_CPU_DESCRIPTOR_HANDLE rtv, FLOAT* clearColor)
-    {
-        cmdList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
-    }
-
-    void ClearDepth(ComPtr<ID3D12GraphicsCommandList> cmdList,
-        D3D12_CPU_DESCRIPTOR_HANDLE dsv, FLOAT depth = 1.0f)
-    {
-        cmdList->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, depth, 0, 0, nullptr);
-    }
-
     // --- Helper to Upload Data to GPU ---
     // MiniEngine handles this in CommandContext::InitializeBuffer
-    void UpdateBufferResource(ComPtr<ID3D12GraphicsCommandList> cmdList,
-        GpuResource& destinationResource, 
+    void UpdateBufferResource(GraphicsContext& context, 
+        GpuResource& destinationResource,
         ID3D12Resource** pIntermediateResource,
         size_t numElements, size_t elementSize, const void* bufferData,
         D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
@@ -486,16 +438,15 @@ private:
         auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, flags);
 
         // 1. Create the resource
-        // Note: We use destinationResource.GetAddressOf() here
         ThrowIfFailed(Graphics::g_Device->CreateCommittedResource(
             &defaultHeapProperties,
             D3D12_HEAP_FLAG_NONE,
             &bufferDesc,
-            D3D12_RESOURCE_STATE_COPY_DEST, // Created in COPY_DEST
+            D3D12_RESOURCE_STATE_COPY_DEST,
             nullptr,
             IID_PPV_ARGS(destinationResource.GetAddressOf())));
 
-        // 2. IMPORTANT: Tell GpuResource about the state!
+        // 2. Tell GpuResource about the state!
         destinationResource.SetUsageState(D3D12_RESOURCE_STATE_COPY_DEST);
 
         // Create the upload buffer (Upload Heap)
@@ -517,10 +468,11 @@ private:
             subresourceData.RowPitch = bufferSize;
             subresourceData.SlicePitch = subresourceData.RowPitch;
 
-            UpdateSubresources(cmdList.Get(), destinationResource.GetResource(), *pIntermediateResource, 0, 0, 1, &subresourceData);
+            // Use context.GetCommandList() for the raw D3D12 call
+            UpdateSubresources(context.GetCommandList(), destinationResource.GetResource(), *pIntermediateResource, 0, 0, 1, &subresourceData);
 
-            // 3. Automatically transition it to GENERIC_READ so it's ready for rendering
-            TransitionResource(cmdList, destinationResource, D3D12_RESOURCE_STATE_GENERIC_READ);
+            // 3. Use Context to transition!
+            context.TransitionResource(destinationResource, D3D12_RESOURCE_STATE_GENERIC_READ);
         }
     }
 
@@ -532,7 +484,7 @@ private:
 
     CommandQueue m_CommandQueue;
     ComPtr<IDXGISwapChain4> m_SwapChain;
-    ComPtr<ID3D12GraphicsCommandList> m_CommandList;
+    
    
     ColorBuffer m_DisplayPlane[m_NumFrames];
     DescriptorHeap m_RTVHeap;

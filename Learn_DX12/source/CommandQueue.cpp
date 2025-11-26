@@ -72,8 +72,8 @@ uint64_t CommandQueue::ExecuteCommandList(ID3D12CommandList* List)
 {
     std::lock_guard<std::mutex> LockGuard(m_FenceMutex);
 
-    // Close the command list before executing
-    ((ID3D12GraphicsCommandList*)List)->Close();
+    // DELETE OR COMMENT OUT THIS LINE for now:
+    // ((ID3D12GraphicsCommandList*)List)->Close(); 
 
     // Kickoff the command list
     ID3D12CommandList* const ppCommandLists[] = { List };

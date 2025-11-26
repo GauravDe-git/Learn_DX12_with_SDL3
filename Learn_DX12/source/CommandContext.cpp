@@ -1,16 +1,26 @@
 #include "../include/CommandContext.hpp"
 
+#include "../include/helpers.hpp"
+
 using namespace Microsoft::WRL;
 
 CommandContext::CommandContext(CommandQueue& Queue)
     : m_Queue(Queue), m_CurrentAllocator(nullptr)
 {
-    // Create the command list once. We will reset it later.
-    // We need an initial allocator just to create it, but we can discard it immediately.
-    ID3D12CommandAllocator* allocator = m_Queue.RequestAllocator();
-    Graphics::g_Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr, IID_PPV_ARGS(&m_CommandList));
-    m_CommandList->Close();
-    m_Queue.DiscardAllocator(0, allocator);
+    // 1. Get an allocator (it might be dirty from a previous frame!)
+    m_CurrentAllocator = m_Queue.RequestAllocator();
+
+    // 2. !!! ADD THIS LINE !!! 
+    // must wipe the allocator clean before creating a list with it.
+    m_CurrentAllocator->Reset();
+
+    // 3. Create the command list
+    ThrowIfFailed(Graphics::g_Device->CreateCommandList(
+        0,
+        D3D12_COMMAND_LIST_TYPE_DIRECT,
+        m_CurrentAllocator,
+        nullptr,
+        IID_PPV_ARGS(&m_CommandList)));
 }
 
 CommandContext::~CommandContext()
@@ -25,22 +35,25 @@ CommandContext::~CommandContext()
 
 void CommandContext::Reset()
 {
-    // 1. Get a fresh allocator from the queue
+    // 1. Get an allocator
     m_CurrentAllocator = m_Queue.RequestAllocator();
 
-    // 2. Reset the command list using this allocator
-    m_CommandList->Reset(m_CurrentAllocator, nullptr);
+    // 2. ADD THIS LINE !!!
+    m_CurrentAllocator->Reset();
+
+    // 3. Reset the command list
+    ThrowIfFailed(m_CommandList->Reset(m_CurrentAllocator, nullptr));
 }
 
 uint64_t CommandContext::Finish(bool WaitForCompletion)
 {
     // 1. Close the list
-    m_CommandList->Close();
+    ThrowIfFailed(m_CommandList->Close()); // Wrap this too!
 
     // 2. Execute
     uint64_t fenceValue = m_Queue.ExecuteCommandList(m_CommandList.Get());
 
-    // 3. Return the allocator to the pool (marked with the fence value)
+    // 3. Return the allocator
     m_Queue.DiscardAllocator(fenceValue, m_CurrentAllocator);
     m_CurrentAllocator = nullptr;
 
