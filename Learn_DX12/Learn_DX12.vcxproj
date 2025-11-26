@@ -91,6 +91,7 @@
   <ItemGroup>
     <ClCompile Include="source\ColorBuffer.cpp" />
     <ClCompile Include="source\CommandAllocatorPool.cpp" />
+    <ClCompile Include="source\CommandContext.cpp" />
     <ClCompile Include="source\CommandQueue.cpp" />
     <ClCompile Include="source\DepthBuffer.cpp" />
     <ClCompile Include="source\DescriptorHeap.cpp" />
@@ -104,6 +105,7 @@
   <ItemGroup>
     <ClInclude Include="include\ColorBuffer.hpp" />
     <ClInclude Include="include\CommandAllocatorPool.hpp" />
+    <ClInclude Include="include\CommandContext.hpp" />
     <ClInclude Include="include\CommandQueue.hpp" />
     <ClInclude Include="include\DepthBuffer.hpp" />
     <ClInclude Include="include\DescriptorHeap.hpp" />
