@@ -22,11 +22,12 @@
 
 #include <iostream>
 
-// --- Helpers ---
+// --- Engine Includes ---
 #include "../include/helpers.hpp"
 #include "../include/CommandQueue.hpp"
 
 #include "../include/GameCore.hpp"
+#include "../include/GpuResource.hpp"
 
 // --- Namespaces ---
 using namespace Microsoft::WRL; // For ComPtr
@@ -128,7 +129,7 @@ public:
         // B. Upload Vertex Buffer
         ComPtr<ID3D12Resource> intermediateVertexBuffer;
         UpdateBufferResource(m_CommandList.Get(),
-            &m_VertexBuffer, &intermediateVertexBuffer,
+            m_VertexBuffer.GetAddressOf(), &intermediateVertexBuffer,
             _countof(g_Vertices), sizeof(VertexPosColor), g_Vertices);
 
         // Create the Vertex Buffer View
@@ -139,7 +140,7 @@ public:
         // C. Upload Index Buffer
         ComPtr<ID3D12Resource> intermediateIndexBuffer;
         UpdateBufferResource(m_CommandList.Get(),
-            &m_IndexBuffer, &intermediateIndexBuffer,
+            m_IndexBuffer.GetAddressOf(), &intermediateIndexBuffer,
             _countof(g_Indicies), sizeof(WORD), g_Indicies);
 
         // Create the Index Buffer View
@@ -320,7 +321,7 @@ public:
         // -- RECORD COMMANDS -- //
 
         // A. Transition to Render Target
-        TransitionResource(m_CommandList, backBuffer, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        TransitionResource(m_CommandList, backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
         // B. Clear RTV & DSV
         FLOAT clearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
@@ -351,7 +352,7 @@ public:
         m_CommandList->DrawIndexedInstanced(_countof(g_Indicies), 1, 0, 0, 0);
 
         // I. Transition to Present
-        TransitionResource(m_CommandList, backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        TransitionResource(m_CommandList, backBuffer, D3D12_RESOURCE_STATE_PRESENT);
 
         // Execute (CommandQueue closes the list automatically)
         uint64_t fenceValue = m_CommandQueue.ExecuteCommandList(m_CommandList.Get());
@@ -392,7 +393,7 @@ public:
             // 1. Reset Swap Chain Buffers
             for (int i = 0; i < m_NumFrames; ++i)
             {
-                m_BackBuffers[i].Reset();
+                m_BackBuffers[i].Destroy();
                 m_FrameFenceValues[i] = m_CommandQueue.GetLastCompletedFenceValue();
             }
 
@@ -506,7 +507,7 @@ private:
             ComPtr<ID3D12Resource> backBuffer;
             ThrowIfFailed(swapChain->GetBuffer(i, IID_PPV_ARGS(&backBuffer)));
             device->CreateRenderTargetView(backBuffer.Get(), nullptr, rtvHandle);
-            m_BackBuffers[i] = backBuffer;
+            m_BackBuffers[i].SetResource(backBuffer.Get(), D3D12_RESOURCE_STATE_PRESENT);   //m_BackBuffers[i] = backBuffer;
             rtvHandle.Offset(rtvDescriptorSize);
         }
     }
@@ -541,13 +542,28 @@ private:
     // In MiniEngine, these live in the CommandContext class.
     // I implement them here for now, but will move them later.
 
-    void TransitionResource(ComPtr<ID3D12GraphicsCommandList> cmdList,
+    /*void TransitionResource(ComPtr<ID3D12GraphicsCommandList> cmdList,
         ComPtr<ID3D12Resource> resource,
         D3D12_RESOURCE_STATES beforeState, D3D12_RESOURCE_STATES afterState)
     {
         CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
             resource.Get(), beforeState, afterState);
         cmdList->ResourceBarrier(1, &barrier);
+    }*/
+    void TransitionResource(ComPtr<ID3D12GraphicsCommandList> cmdList,
+        GpuResource& resource, D3D12_RESOURCE_STATES newState)
+    {
+        D3D12_RESOURCE_STATES oldState = resource.GetUsageState();
+
+        if (oldState != newState)
+        {
+            CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+                resource.GetResource(), oldState, newState);
+            cmdList->ResourceBarrier(1, &barrier);
+
+            // Update the state tracking
+            resource.SetUsageState(newState);
+        }
     }
 
     void ClearRTV(ComPtr<ID3D12GraphicsCommandList> cmdList,
@@ -635,7 +651,7 @@ private:
                 &texDesc,
                 D3D12_RESOURCE_STATE_DEPTH_WRITE,
                 &optimizedClearValue,
-                IID_PPV_ARGS(&m_DepthBuffer)
+                IID_PPV_ARGS(m_DepthBuffer.GetAddressOf())
             ));
 
             // Update the depth-stencil view.
@@ -645,7 +661,7 @@ private:
             dsv.Texture2D.MipSlice = 0;
             dsv.Flags = D3D12_DSV_FLAG_NONE;
 
-            m_Device->CreateDepthStencilView(m_DepthBuffer.Get(), &dsv,
+            m_Device->CreateDepthStencilView(m_DepthBuffer.GetResource(), &dsv,
                 m_DSVHeap->GetCPUDescriptorHandleForHeapStart());
         }
     }
@@ -659,7 +675,7 @@ private:
     CommandQueue m_CommandQueue;
     ComPtr<ID3D12Device2> m_Device;
     ComPtr<IDXGISwapChain4> m_SwapChain;
-    ComPtr<ID3D12Resource> m_BackBuffers[m_NumFrames];
+    GpuResource m_BackBuffers[m_NumFrames]; //ComPtr<ID3D12Resource> m_BackBuffers[m_NumFrames];
     ComPtr<ID3D12GraphicsCommandList> m_CommandList;
     ComPtr<ID3D12DescriptorHeap> m_RTVDescriptorHeap;
     UINT m_RTVDescriptorSize;
@@ -672,14 +688,14 @@ private:
     ComPtr<ID3D12PipelineState> m_PipelineState;
 
     // --- Data Buffers ---
-    ComPtr<ID3D12Resource> m_VertexBuffer;
+    GpuResource m_VertexBuffer;  //ComPtr<ID3D12Resource> m_VertexBuffer;
     D3D12_VERTEX_BUFFER_VIEW m_VertexBufferView;
 
-    ComPtr<ID3D12Resource> m_IndexBuffer;
+    GpuResource m_IndexBuffer;  //ComPtr<ID3D12Resource> m_IndexBuffer;
     D3D12_INDEX_BUFFER_VIEW m_IndexBufferView;
 
     // --- Depth Buffer ---
-    ComPtr<ID3D12Resource> m_DepthBuffer;
+    GpuResource m_DepthBuffer; //ComPtr<ID3D12Resource> m_DepthBuffer;
     ComPtr<ID3D12DescriptorHeap> m_DSVHeap;
 
     // --- Viewport & Scissor ---
