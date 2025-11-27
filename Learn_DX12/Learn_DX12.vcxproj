@@ -103,6 +103,7 @@
     <ClCompile Include="source\PipelineState.cpp" />
     <ClCompile Include="source\PixelBuffer.cpp" />
     <ClCompile Include="source\RootSingature.cpp" />
+    <ClCompile Include="source\Shapes.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\ColorBuffer.hpp" />
@@ -120,6 +121,7 @@
     <ClInclude Include="include\PipelineState.hpp" />
     <ClInclude Include="include\PixelBuffer.hpp" />
     <ClInclude Include="include\RootSignature.hpp" />
+    <ClInclude Include="include\Shapes.hpp" />
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="shaders\PixelShader.hlsl">
