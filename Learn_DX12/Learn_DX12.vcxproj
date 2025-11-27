@@ -98,6 +98,7 @@
     <ClCompile Include="source\Display.cpp" />
     <ClCompile Include="source\GameCore.cpp" />
     <ClCompile Include="source\GraphicsCore.cpp" />
+    <ClCompile Include="source\LinearAllocator.cpp" />
     <ClCompile Include="source\main.cpp" />
     <ClCompile Include="source\PipelineState.cpp" />
     <ClCompile Include="source\PixelBuffer.cpp" />
@@ -115,6 +116,7 @@
     <ClInclude Include="include\GpuResource.hpp" />
     <ClInclude Include="include\GraphicsCore.hpp" />
     <ClInclude Include="include\helpers.hpp" />
+    <ClInclude Include="include\LinearAllocator.hpp" />
     <ClInclude Include="include\PipelineState.hpp" />
     <ClInclude Include="include\PixelBuffer.hpp" />
     <ClInclude Include="include\RootSignature.hpp" />

@@ -58,10 +58,11 @@ public:
         m_pResource = pResource;
         m_UsageState = State;
     }
+    D3D12_GPU_VIRTUAL_ADDRESS m_GpuVirtualAddress; //put in public for the linear allocator
 
 protected:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_pResource;
     D3D12_RESOURCE_STATES m_UsageState;
     D3D12_RESOURCE_STATES m_TransitioningState;
-    D3D12_GPU_VIRTUAL_ADDRESS m_GpuVirtualAddress;
+    
 };
