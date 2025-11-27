@@ -1,6 +1,6 @@
 #include "../include/Shapes.hpp"
 #include "../include/GraphicsCore.hpp"
-#include "../include/CommandContext.hpp"
+
 #include <d3dx12.h>
 
 using namespace DirectX;
@@ -11,7 +11,7 @@ namespace Graphics
     {
         const uint32_t BoxIndexCount = 36;
 
-        void InitializeBox(GpuResource& DestVerts, GpuResource& DestIndices)
+        void InitializeBox(GpuBuffer& DestVerts, GpuBuffer& DestIndices)
         {
             // Cube Data (Moved from main.cpp)
             static VertexPosColor g_Vertices[8] = {
@@ -35,36 +35,8 @@ namespace Graphics
                 4, 0, 3, 4, 3, 7
             };
 
-            // 1. Create Resources (Default Heap)
-            // We create the committed resources here.
-            {
-                auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-                auto desc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(g_Vertices));
-                Graphics::g_Device->CreateCommittedResource(
-                    &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-                    D3D12_RESOURCE_STATE_COMMON, nullptr,
-                    IID_PPV_ARGS(DestVerts.GetAddressOf()));
-                DestVerts.SetUsageState(D3D12_RESOURCE_STATE_COMMON);
-            }
-
-            {
-                auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-                auto desc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(g_Indicies));
-                Graphics::g_Device->CreateCommittedResource(
-                    &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-                    D3D12_RESOURCE_STATE_COMMON, nullptr,
-                    IID_PPV_ARGS(DestIndices.GetAddressOf()));
-                DestIndices.SetUsageState(D3D12_RESOURCE_STATE_COMMON);
-            }
-
-            // 2. Upload Data
-            // Create a temporary context just for this upload
-            GraphicsContext Context(Graphics::g_CommandQueue);
-
-            Context.InitializeBuffer(DestVerts, g_Vertices, sizeof(g_Vertices));
-            Context.InitializeBuffer(DestIndices, g_Indicies, sizeof(g_Indicies));
-
-            Context.Finish(true); // Wait for upload to complete
+            DestVerts.Create(L"Box Vertices", 8, sizeof(VertexPosColor), g_Vertices);
+            DestIndices.Create(L"Box Indices", 36, sizeof(WORD), g_Indicies);
         }
     }
 }

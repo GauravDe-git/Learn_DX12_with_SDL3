@@ -1,7 +1,7 @@
 #pragma once
 
 #include <DirectXMath.h>
-#include "GpuResource.hpp"
+#include "GpuBuffer.hpp"
 
 namespace Graphics
 {
@@ -17,6 +17,6 @@ namespace Graphics
         extern const uint32_t BoxIndexCount;
 
         // Initializes the buffers with the cube data
-        void InitializeBox(GpuResource& DestVerts, GpuResource& DestIndices);
+        void InitializeBox(GpuBuffer& DestVerts, GpuBuffer& DestIndices);
     }
 }

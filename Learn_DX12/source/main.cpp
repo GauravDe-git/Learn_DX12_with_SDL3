@@ -30,6 +30,7 @@
 #include "../include/GraphicsCore.hpp"
 #include "../include/Display.hpp"
 #include "../include/GpuResource.hpp"
+#include "../include/GpuBuffer.hpp" 
 #include "../include/ColorBuffer.hpp"
 #include "../include/DepthBuffer.hpp"
 #include "../include/DescriptorHeap.hpp"
@@ -85,19 +86,6 @@ public:
            // B. Create Views
            // We know the box has 8 vertices and 36 indices.
            // Afterwards, the Model class would hold these views.
-
-        m_VertexBufferView.BufferLocation = m_VertexBuffer->GetGPUVirtualAddress();
-        m_VertexBufferView.SizeInBytes = 8 * sizeof(Graphics::Shapes::VertexPosColor);
-        m_VertexBufferView.StrideInBytes = sizeof(Graphics::Shapes::VertexPosColor);
-
-        m_IndexBufferView.BufferLocation = m_IndexBuffer->GetGPUVirtualAddress();
-        m_IndexBufferView.Format = DXGI_FORMAT_R16_UINT;
-        m_IndexBufferView.SizeInBytes = 36 * sizeof(WORD);
-
-        // Create the Index Buffer View
-        m_IndexBufferView.BufferLocation = m_IndexBuffer->GetGPUVirtualAddress();
-        m_IndexBufferView.Format = DXGI_FORMAT_R16_UINT;
-        m_IndexBufferView.SizeInBytes = Graphics::Shapes::BoxIndexCount * sizeof(WORD);
 
         // D. Create DSV Descriptor Heap (Already done in 5.)
 
@@ -212,8 +200,8 @@ public:
         Context.SetRenderTarget(backBuffer.GetRTV(), m_DepthBuffer.GetDSV());
 
         // 6. Bind Buffers
-        Context.SetVertexBuffer(0, m_VertexBufferView);
-        Context.SetIndexBuffer(m_IndexBufferView);
+        Context.SetVertexBuffer(0, m_VertexBuffer.VertexBufferView());
+        Context.SetIndexBuffer(m_IndexBuffer.IndexBufferView());
 
         // 7. Update Constants
         XMMATRIX mvpMatrix = XMMatrixMultiply(m_ModelMatrix, m_ViewMatrix);
@@ -276,11 +264,8 @@ private:
     GraphicsPipelineState m_PipelineState;
 
     // --- Data Buffers ---
-    GpuResource m_VertexBuffer;  
-    D3D12_VERTEX_BUFFER_VIEW m_VertexBufferView;
-
-    GpuResource m_IndexBuffer;  
-    D3D12_INDEX_BUFFER_VIEW m_IndexBufferView;
+    GpuBuffer m_VertexBuffer;
+    GpuBuffer m_IndexBuffer;
 
     // --- Depth Buffer ---
     DepthBuffer m_DepthBuffer;
