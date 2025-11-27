@@ -97,6 +97,7 @@
     <ClCompile Include="source\DescriptorHeap.cpp" />
     <ClCompile Include="source\Display.cpp" />
     <ClCompile Include="source\GameCore.cpp" />
+    <ClCompile Include="source\GpuBuffer.cpp" />
     <ClCompile Include="source\GraphicsCore.cpp" />
     <ClCompile Include="source\LinearAllocator.cpp" />
     <ClCompile Include="source\main.cpp" />
@@ -114,6 +115,7 @@
     <ClInclude Include="include\DescriptorHeap.hpp" />
     <ClInclude Include="include\Display.hpp" />
     <ClInclude Include="include\GameCore.hpp" />
+    <ClInclude Include="include\GpuBuffer.hpp" />
     <ClInclude Include="include\GpuResource.hpp" />
     <ClInclude Include="include\GraphicsCore.hpp" />
     <ClInclude Include="include\helpers.hpp" />
