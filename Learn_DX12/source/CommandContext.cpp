@@ -5,7 +5,9 @@
 using namespace Microsoft::WRL;
 
 CommandContext::CommandContext(CommandQueue& Queue)
-    : m_Queue(Queue), m_CurrentAllocator(nullptr)
+    : m_Queue(Queue) 
+     ,m_CurrentAllocator(nullptr)
+     ,m_CpuLinearAllocator(kCpuWritable)
 {
     // 1. Get an allocator (it might be dirty from a previous frame!)
     m_CurrentAllocator = m_Queue.RequestAllocator();
@@ -57,6 +59,9 @@ uint64_t CommandContext::Finish(bool WaitForCompletion)
     m_Queue.DiscardAllocator(fenceValue, m_CurrentAllocator);
     m_CurrentAllocator = nullptr;
 
+    // --- Cleanup Upload Pages ---
+    m_CpuLinearAllocator.CleanupUsedPages(fenceValue);
+
     // 4. Optional wait
     if (WaitForCompletion)
     {
@@ -92,6 +97,28 @@ void CommandContext::CopyBufferRegion(GpuResource& Dest, size_t DestOffset, GpuR
     TransitionResource(Dest, D3D12_RESOURCE_STATE_COPY_DEST);
     TransitionResource(Src, D3D12_RESOURCE_STATE_COPY_SOURCE);
     m_CommandList->CopyBufferRegion(Dest.GetResource(), DestOffset, Src.GetResource(), SrcOffset, NumBytes);
+}
+
+DynAlloc CommandContext::ReserveUploadMemory(size_t SizeInBytes)
+{
+    return m_CpuLinearAllocator.Allocate(SizeInBytes);
+}
+
+void CommandContext::InitializeBuffer(GpuResource& Dest, const void* Data, size_t NumBytes, size_t Offset)
+{
+    // 1. Allocate space in the upload heap
+    DynAlloc Mem = ReserveUploadMemory(NumBytes);
+
+    // 2. Copy the data from CPU memory to the upload heap
+    memcpy(Mem.DataPtr, Data, NumBytes);
+
+    // 3. Schedule a copy from the upload heap to the destination buffer
+    // Note: We use the base GpuResource from the DynAlloc (which is the Page)
+    TransitionResource(Dest, D3D12_RESOURCE_STATE_COPY_DEST, true);
+
+    m_CommandList->CopyBufferRegion(Dest.GetResource(), Offset, Mem.Buffer.GetResource(), Mem.Offset, NumBytes);
+
+    TransitionResource(Dest, D3D12_RESOURCE_STATE_GENERIC_READ, true);
 }
 
 // ========================================= //

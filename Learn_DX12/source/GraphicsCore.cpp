@@ -1,10 +1,13 @@
 #include "../include/GraphicsCore.hpp"
 #include "../include/helpers.hpp"
+#include "../include/LinearAllocator.hpp"
 
 #include <dxgi1_6.h>
 
 #include <iostream>
 using namespace Microsoft::WRL;
+
+// We don't need to "initialize" linear the allocator explicitly because the static page manager initializes itself on first use (C++ magic). But we must clean it up.
 
 namespace Graphics
 {
@@ -73,6 +76,9 @@ namespace Graphics
     {
         // Shut command_queue down before destroying the device
         g_CommandQueue.Shutdown();
+
+        // Destroy all upload pages
+        LinearAllocator::DestroyAll();
 
         g_Device.Reset();
     }

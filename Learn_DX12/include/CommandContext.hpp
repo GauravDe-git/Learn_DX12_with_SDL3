@@ -5,6 +5,7 @@
 #include "d3dx12.h"
 
 #include "GraphicsCore.hpp"
+#include "LinearAllocator.hpp"
 #include "CommandQueue.hpp"
 #include "PipelineState.hpp"
 #include "RootSignature.hpp"
@@ -32,12 +33,18 @@ public:
     void CopyBuffer(GpuResource& Dest, GpuResource& Src);
     void CopyBufferRegion(GpuResource& Dest, size_t DestOffset, GpuResource& Src, size_t SrcOffset, size_t NumBytes);
 
+    // --- Linear Allocator Buffer Memory management ---
+    DynAlloc ReserveUploadMemory(size_t SizeInBytes);
+    void InitializeBuffer(GpuResource& Dest, const void* Data, size_t NumBytes, size_t Offset = 0);
+
     ID3D12GraphicsCommandList* GetCommandList() const { return m_CommandList.Get(); }
 
 protected:
     CommandQueue& m_Queue;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_CommandList;
     ID3D12CommandAllocator* m_CurrentAllocator; // Borrowed from Queue
+
+    LinearAllocator m_CpuLinearAllocator;
 };
 
 class GraphicsContext : public CommandContext
