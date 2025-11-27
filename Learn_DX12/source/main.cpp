@@ -102,10 +102,26 @@ public:
         GraphicsContext InitializeContext(Graphics::g_CommandQueue);
 
         // B. Upload Vertex Buffer
-        ComPtr<ID3D12Resource> intermediateVertexBuffer;
-        UpdateBufferResource(InitializeContext,
-            m_VertexBuffer, &intermediateVertexBuffer,
-            _countof(g_Vertices), sizeof(VertexPosColor), g_Vertices);
+
+        // Create the resource first (Default Heap)
+        /* small block to create the destination buffer first.In MiniEngine, GpuBuffer::Create handles this.
+           Since we only have the base GpuResource right now, we create the committed resource manually(just 5 lines), 
+           and then let InitializeBuffer handle the complex upload part.*/
+
+
+        // 1. Create the destination buffer (GPU only)
+        {
+            auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+            auto desc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(g_Vertices));
+            ThrowIfFailed(Graphics::g_Device->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_COMMON, nullptr,
+                IID_PPV_ARGS(m_VertexBuffer.GetAddressOf())));
+            m_VertexBuffer.SetUsageState(D3D12_RESOURCE_STATE_COMMON);
+        }
+
+        // 2. Upload data using Linear Allocator!
+        InitializeContext.InitializeBuffer(m_VertexBuffer, g_Vertices, sizeof(g_Vertices));
 
         // Create the Vertex Buffer View
         m_VertexBufferView.BufferLocation = m_VertexBuffer->GetGPUVirtualAddress();
@@ -113,10 +129,17 @@ public:
         m_VertexBufferView.StrideInBytes = sizeof(VertexPosColor);
 
         // C. Upload Index Buffer
-        ComPtr<ID3D12Resource> intermediateIndexBuffer;
-        UpdateBufferResource(InitializeContext,
-            m_IndexBuffer, &intermediateIndexBuffer,
-            _countof(g_Indicies), sizeof(WORD), g_Indicies);
+        {
+            auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+            auto desc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(g_Indicies));
+            ThrowIfFailed(Graphics::g_Device->CreateCommittedResource(
+                &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
+                D3D12_RESOURCE_STATE_COMMON, nullptr,
+                IID_PPV_ARGS(m_IndexBuffer.GetAddressOf())));
+            m_IndexBuffer.SetUsageState(D3D12_RESOURCE_STATE_COMMON);
+        }
+
+        InitializeContext.InitializeBuffer(m_IndexBuffer, g_Indicies, sizeof(g_Indicies));
 
         // Create the Index Buffer View
         m_IndexBufferView.BufferLocation = m_IndexBuffer->GetGPUVirtualAddress();
@@ -285,62 +308,6 @@ public:
 
             // 3. Update Viewport
             m_Viewport = CD3DX12_VIEWPORT(0.0f, 0.0f, (float)width, (float)height);
-        }
-    }
-
-private:
-    // ------------------- Helper Functions ------------------- //
-
-    // --- Helper to Upload Data to GPU ---
-    // MiniEngine handles this in CommandContext::InitializeBuffer
-    void UpdateBufferResource(GraphicsContext& context, 
-        GpuResource& destinationResource,
-        ID3D12Resource** pIntermediateResource,
-        size_t numElements, size_t elementSize, const void* bufferData,
-        D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
-    {
-        size_t bufferSize = numElements * elementSize;
-
-        // Create the actual GPU buffer (Default Heap)
-        auto defaultHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-        auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, flags);
-
-        // 1. Create the resource
-        ThrowIfFailed(Graphics::g_Device->CreateCommittedResource(
-            &defaultHeapProperties,
-            D3D12_HEAP_FLAG_NONE,
-            &bufferDesc,
-            D3D12_RESOURCE_STATE_COPY_DEST,
-            nullptr,
-            IID_PPV_ARGS(destinationResource.GetAddressOf())));
-
-        // 2. Tell GpuResource about the state!
-        destinationResource.SetUsageState(D3D12_RESOURCE_STATE_COPY_DEST);
-
-        // Create the upload buffer (Upload Heap)
-        if (bufferData)
-        {
-            auto uploadHeapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
-            auto uploadBufferDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize);
-
-            ThrowIfFailed(Graphics::g_Device->CreateCommittedResource(
-                &uploadHeapProperties,
-                D3D12_HEAP_FLAG_NONE,
-                &uploadBufferDesc,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                nullptr,
-                IID_PPV_ARGS(pIntermediateResource)));
-
-            D3D12_SUBRESOURCE_DATA subresourceData = {};
-            subresourceData.pData = bufferData;
-            subresourceData.RowPitch = bufferSize;
-            subresourceData.SlicePitch = subresourceData.RowPitch;
-
-            // Use context.GetCommandList() for the raw D3D12 call
-            UpdateSubresources(context.GetCommandList(), destinationResource.GetResource(), *pIntermediateResource, 0, 0, 1, &subresourceData);
-
-            // 3. Use Context to transition!
-            context.TransitionResource(destinationResource, D3D12_RESOURCE_STATE_GENERIC_READ);
         }
     }
 

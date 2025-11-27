@@ -160,6 +160,12 @@ DynAlloc LinearAllocator::Allocate(size_t SizeInBytes, size_t Alignment)
         m_CurOffset = 0;
     }
 
+    if (m_CurPage == nullptr)
+    {
+        m_CurPage = sm_PageManager[m_AllocationType].RequestPage();
+        m_CurOffset = 0;
+    }
+
     DynAlloc ret(*m_CurPage, m_CurOffset, AlignedSize);
     ret.DataPtr = (uint8_t*)m_CurPage->m_CpuVirtualAddress + m_CurOffset;
     ret.GpuAddress = m_CurPage->m_GpuVirtualAddress + m_CurOffset;
