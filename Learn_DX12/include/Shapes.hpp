@@ -14,6 +14,8 @@ namespace Graphics
             DirectX::XMFLOAT3 Color;
         };
 
+        extern const uint32_t BoxIndexCount;
+
         // Initializes the buffers with the cube data
         void InitializeBox(GpuResource& DestVerts, GpuResource& DestIndices);
     }

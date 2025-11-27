@@ -9,6 +9,8 @@ namespace Graphics
 {
     namespace Shapes
     {
+        const uint32_t BoxIndexCount = 36;
+
         void InitializeBox(GpuResource& DestVerts, GpuResource& DestIndices)
         {
             // Cube Data (Moved from main.cpp)

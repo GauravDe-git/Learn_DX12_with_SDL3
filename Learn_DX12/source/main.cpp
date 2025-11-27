@@ -37,39 +37,11 @@
 #include "../include/PipelineState.hpp"
 
 #include "../include/CommandContext.hpp"
+#include "../include/Shapes.hpp"
 
 // --- Namespaces ---
 using namespace Microsoft::WRL; // For ComPtr
 using namespace DirectX;    //temporariliy put the directx namespace here for the dxmath
-
-// --- Vertex Structure ---
-struct VertexPosColor
-{
-    XMFLOAT3 Position;
-    XMFLOAT3 Color;
-};
-
-// --- Cube Data ---
-static VertexPosColor g_Vertices[8] = {
-    { XMFLOAT3(-1.0f, -1.0f, -1.0f), XMFLOAT3(0.0f, 0.0f, 0.0f) }, // 0
-    { XMFLOAT3(-1.0f,  1.0f, -1.0f), XMFLOAT3(0.0f, 1.0f, 0.0f) }, // 1
-    { XMFLOAT3(1.0f,  1.0f, -1.0f), XMFLOAT3(1.0f, 1.0f, 0.0f) }, // 2
-    { XMFLOAT3(1.0f, -1.0f, -1.0f), XMFLOAT3(1.0f, 0.0f, 0.0f) }, // 3
-    { XMFLOAT3(-1.0f, -1.0f,  1.0f), XMFLOAT3(0.0f, 0.0f, 1.0f) }, // 4
-    { XMFLOAT3(-1.0f,  1.0f,  1.0f), XMFLOAT3(0.0f, 1.0f, 1.0f) }, // 5
-    { XMFLOAT3(1.0f,  1.0f,  1.0f), XMFLOAT3(1.0f, 1.0f, 1.0f) }, // 6
-    { XMFLOAT3(1.0f, -1.0f,  1.0f), XMFLOAT3(1.0f, 0.0f, 1.0f) }  // 7
-};
-
-static WORD g_Indicies[36] =
-{
-    0, 1, 2, 0, 2, 3,
-    4, 6, 5, 4, 7, 6,
-    4, 5, 1, 4, 1, 0,
-    3, 2, 6, 3, 6, 7,
-    1, 5, 6, 1, 6, 2,
-    4, 0, 3, 4, 3, 7
-};
 
 // ----------- The Application Class -----------
 class HD2D_Renderer : public Game
@@ -99,7 +71,9 @@ public:
         // A. Create a Command List for Uploading Data
         // Later on in the engine, might have to use a separate Copy Queue, but Direct Queue works fine for now.
         // reuse m_CommandList which was closed in step 6.
-        GraphicsContext InitializeContext(Graphics::g_CommandQueue);
+
+        // A. Initialize Shapes (Creates & Uploads Buffers)
+        Graphics::Shapes::InitializeBox(m_VertexBuffer, m_IndexBuffer);
 
         // B. Upload Vertex Buffer
 
@@ -108,43 +82,22 @@ public:
            Since we only have the base GpuResource right now, we create the committed resource manually(just 5 lines), 
            and then let InitializeBuffer handle the complex upload part.*/
 
+           // B. Create Views
+           // We know the box has 8 vertices and 36 indices.
+           // Afterwards, the Model class would hold these views.
 
-        // 1. Create the destination buffer (GPU only)
-        {
-            auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-            auto desc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(g_Vertices));
-            ThrowIfFailed(Graphics::g_Device->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_COMMON, nullptr,
-                IID_PPV_ARGS(m_VertexBuffer.GetAddressOf())));
-            m_VertexBuffer.SetUsageState(D3D12_RESOURCE_STATE_COMMON);
-        }
-
-        // 2. Upload data using Linear Allocator!
-        InitializeContext.InitializeBuffer(m_VertexBuffer, g_Vertices, sizeof(g_Vertices));
-
-        // Create the Vertex Buffer View
         m_VertexBufferView.BufferLocation = m_VertexBuffer->GetGPUVirtualAddress();
-        m_VertexBufferView.SizeInBytes = sizeof(g_Vertices);
-        m_VertexBufferView.StrideInBytes = sizeof(VertexPosColor);
+        m_VertexBufferView.SizeInBytes = 8 * sizeof(Graphics::Shapes::VertexPosColor);
+        m_VertexBufferView.StrideInBytes = sizeof(Graphics::Shapes::VertexPosColor);
 
-        // C. Upload Index Buffer
-        {
-            auto heapProps = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-            auto desc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(g_Indicies));
-            ThrowIfFailed(Graphics::g_Device->CreateCommittedResource(
-                &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_COMMON, nullptr,
-                IID_PPV_ARGS(m_IndexBuffer.GetAddressOf())));
-            m_IndexBuffer.SetUsageState(D3D12_RESOURCE_STATE_COMMON);
-        }
-
-        InitializeContext.InitializeBuffer(m_IndexBuffer, g_Indicies, sizeof(g_Indicies));
+        m_IndexBufferView.BufferLocation = m_IndexBuffer->GetGPUVirtualAddress();
+        m_IndexBufferView.Format = DXGI_FORMAT_R16_UINT;
+        m_IndexBufferView.SizeInBytes = 36 * sizeof(WORD);
 
         // Create the Index Buffer View
         m_IndexBufferView.BufferLocation = m_IndexBuffer->GetGPUVirtualAddress();
         m_IndexBufferView.Format = DXGI_FORMAT_R16_UINT;
-        m_IndexBufferView.SizeInBytes = sizeof(g_Indicies);
+        m_IndexBufferView.SizeInBytes = Graphics::Shapes::BoxIndexCount * sizeof(WORD);
 
         // D. Create DSV Descriptor Heap (Already done in 5.)
 
@@ -183,8 +136,7 @@ public:
 
         m_ContentLoaded = true;
 
-        // Finish and Execute Command List
-        InitializeContext.Finish(true); // true = Wait for completion (so we can safely delete intermediate buffers)
+        // Finish and Execute Command List (Shapes::InitializeBox handled it) 
     }
 
     virtual void Cleanup() override
@@ -269,7 +221,7 @@ public:
         Context.SetConstants(0, sizeof(XMMATRIX) / 4, &mvpMatrix);
 
         // 8. Draw
-        Context.DrawIndexed(_countof(g_Indicies));
+        Context.DrawIndexed(Graphics::Shapes::BoxIndexCount);
 
         // 9. Transition to Present
         Context.TransitionResource(backBuffer, D3D12_RESOURCE_STATE_PRESENT);
