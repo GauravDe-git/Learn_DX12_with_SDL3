@@ -148,6 +148,10 @@ int main(int argc, char* argv[])
             throw std::exception("No compatible DirectX 12 adapter found.");
         }
         std::cout << "Adapter found. Ready to create device.\n";
+        DXGI_ADAPTER_DESC adapterDesc;
+        adapter->GetDesc(&adapterDesc);
+        std::wcout<< L"Model Name: " << adapterDesc.Description << std::endl;
+        std::wcout << L"VRAM: " << adapterDesc.DedicatedVideoMemory << std::endl;
 
         // Create the D3D12 Device
         g_Device = CreateDevice(adapter);
