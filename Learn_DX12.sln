@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Learn_DX12", "Learn_DX12\Le
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DX12_Practice_1", "DX12_Practice_1\DX12_Practice_1.vcxproj", "{4B556FB7-033E-481C-9E3C-A8A195EE1F3F}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DX12_Practice_2", "DX12_Practice_2\DX12_Practice_2.vcxproj", "{279EC7DF-49FC-4A53-919C-824D8328F834}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -21,6 +23,10 @@ Global
 		{4B556FB7-033E-481C-9E3C-A8A195EE1F3F}.Debug|x64.Build.0 = Debug|x64
 		{4B556FB7-033E-481C-9E3C-A8A195EE1F3F}.Release|x64.ActiveCfg = Release|x64
 		{4B556FB7-033E-481C-9E3C-A8A195EE1F3F}.Release|x64.Build.0 = Release|x64
+		{279EC7DF-49FC-4A53-919C-824D8328F834}.Debug|x64.ActiveCfg = Debug|x64
+		{279EC7DF-49FC-4A53-919C-824D8328F834}.Debug|x64.Build.0 = Debug|x64
+		{279EC7DF-49FC-4A53-919C-824D8328F834}.Release|x64.ActiveCfg = Release|x64
+		{279EC7DF-49FC-4A53-919C-824D8328F834}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

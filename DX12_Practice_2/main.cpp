@@ -11,6 +11,7 @@
 // DirectX-Headers
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <d3dcompiler.h>
 
 // Windows Run-Time C++ template Library Header
 #include <wrl/client.h>
@@ -146,8 +147,8 @@ static void Resize(
 
 int main(int argc, char* argv[])
 {
-	constexpr int  width{640};
-	constexpr int  height{480};
+	int  width{640};
+	int  height{480};
 	bool vsync = true;
 	constexpr UINT bufferCount{2};
 	// Store the actual resource pointers for the back buffers
@@ -360,6 +361,10 @@ int main(int argc, char* argv[])
 
 #pragma endregion
 
+#pragma region Block B: The "Memory"
+
+// TODO: Can Put Depth Buffer/ DSV Heap Here Later
+
 	// 1.10.1 Create the RTV Descriptor Heap
 	//-------------------------------------
 	ComPtr<ID3D12DescriptorHeap> rtvHeap;
@@ -393,6 +398,147 @@ int main(int argc, char* argv[])
 		rtvHandle.ptr += rtvDescriptorSize;
 	}
 	SDL_Log("RTVs Initialized for %u Back Buffers.", bufferCount);
+
+#pragma endregion
+
+#pragma region Block C: The "Pipeline" (What we are drawing)
+
+	// C.1 Create an Empty Root Signature
+	// -----------------------------------
+	// The Root Signature defines what data the shader expects (textures, buffers).
+	// For this challenge, we hardcode vertices in the shader, so we need NOTHING.
+
+	ComPtr<ID3D12RootSignature> rootSignature;
+
+	// Define the description 
+	D3D12_ROOT_SIGNATURE_DESC rootSigDesc = {};
+	rootSigDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
+
+	// Serialize
+	ComPtr<ID3DBlob> signatureBlob, errorBlob;
+	HRESULT serializedRootSig = D3D12SerializeRootSignature(&rootSigDesc,D3D_ROOT_SIGNATURE_VERSION_1,&signatureBlob,&errorBlob);
+	if (FAILED(serializedRootSig)) {
+		// If it fails, the errorBlob contains the text message explaining why
+		if (errorBlob) {
+			SDL_LogError(SDL_LOG_CATEGORY_RENDER, "Root Sig Error: %s", static_cast<char*>(errorBlob->GetBufferPointer()));
+		}
+		return 1;
+	}
+
+	// Create it
+	ASSERT_SUCCEEDED(device2->CreateRootSignature(0, signatureBlob->GetBufferPointer(), signatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature)),"Root Signature creation failed \n")
+	SDL_Log("Root Signature Created.");
+
+	// C.2. Compile Shaders
+	//========================
+
+	ComPtr<ID3DBlob> vertexShaderBlob;
+	ComPtr<ID3DBlob> pixelShaderBlob;
+	ComPtr<ID3DBlob> errorShaderBlob;
+	UINT compileFlags = 0; 
+#ifdef _DEBUG	// Disable optimizations in debug mode
+	compileFlags = D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+	HRESULT shaderCompile = D3DCompileFromFile(
+		L"shaders.hlsl", // WString filename
+		nullptr, nullptr,
+		"VS_Main",        // Entry Point function name in HLSL
+		"vs_5_1",        // Target: Vertex Shader model 5.1
+		compileFlags, 0,
+		&vertexShaderBlob,
+		&errorBlob
+	);
+	if (FAILED(shaderCompile)) {
+		if (errorBlob) {
+			SDL_LogError(SDL_LOG_CATEGORY_RENDER, "VS Compile Error: %s", (char*)errorBlob->GetBufferPointer());
+		}
+		return 1;
+	}
+	// Compile Pixel Shader
+	shaderCompile = D3DCompileFromFile(
+		L"shaders.hlsl",
+		nullptr, nullptr,
+		"PS_Main",        // Entry Point
+		"ps_5_1",        // Target: Pixel Shader model 5.1
+		compileFlags, 0,
+		&pixelShaderBlob,
+		&errorBlob
+	);
+
+	if (FAILED(shaderCompile)) {
+		if (errorBlob) {
+			SDL_LogError(SDL_LOG_CATEGORY_RENDER, "PS Compile Error: %s", (char*)errorBlob->GetBufferPointer());
+		}
+		return 1;
+	}
+	SDL_Log("Shaders Compiled Successfully.");
+
+	// C.3 The Pipeline State Object (PSO)
+	//====================================
+	ComPtr<ID3D12PipelineState> pipelineState;
+
+	// Define the input layout (empty for Challenge 2)
+	// D3D12_INPUT_ELEMENT_DESC inputElementDescs[] = {};
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+
+	psoDesc.InputLayout = {nullptr,0}; //nullptr coz we pass no data, 0 elements
+	psoDesc.pRootSignature = rootSignature.Get();
+
+	// Shaders (Manually filling the byte code struct)
+	psoDesc.VS.pShaderBytecode = vertexShaderBlob->GetBufferPointer();
+	psoDesc.VS.BytecodeLength = vertexShaderBlob->GetBufferSize();
+	psoDesc.PS.pShaderBytecode = pixelShaderBlob->GetBufferPointer();
+	psoDesc.PS.BytecodeLength = pixelShaderBlob->GetBufferSize();
+
+	// Rasterizer State (The "How to draw" rules)
+	// Without CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT), we fill it manually:
+	D3D12_RASTERIZER_DESC rasterDesc = {};
+	rasterDesc.FillMode = D3D12_FILL_MODE_SOLID;
+	rasterDesc.CullMode = D3D12_CULL_MODE_NONE; // SAFEST for beginners! (Draws both sides)
+	rasterDesc.FrontCounterClockwise = FALSE;
+	rasterDesc.DepthBias = D3D12_DEFAULT_DEPTH_BIAS;
+	rasterDesc.DepthBiasClamp = D3D12_DEFAULT_DEPTH_BIAS_CLAMP;
+	rasterDesc.SlopeScaledDepthBias = D3D12_DEFAULT_SLOPE_SCALED_DEPTH_BIAS;
+	rasterDesc.DepthClipEnable = TRUE;
+	rasterDesc.MultisampleEnable = FALSE;
+	rasterDesc.AntialiasedLineEnable = FALSE;
+	rasterDesc.ForcedSampleCount = 0;
+	rasterDesc.ConservativeRaster = D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF;
+
+	psoDesc.RasterizerState = rasterDesc;
+
+	// Blend State (How colors mix)
+	// Without CD3DX12_BLEND_DESC(D3D12_DEFAULT), we fill it manually:
+	D3D12_BLEND_DESC blendDesc = {};
+	blendDesc.AlphaToCoverageEnable = FALSE;
+	blendDesc.IndependentBlendEnable = FALSE;
+	// We only have 1 Render Target (Index 0)
+	blendDesc.RenderTarget[0].BlendEnable = FALSE; // No transparency for now
+	blendDesc.RenderTarget[0].LogicOpEnable = FALSE;
+	blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL; // Write R, G, B, and A
+
+	psoDesc.BlendState = blendDesc;
+
+	// Depth Stencil State
+	// We aren't using a Z-Buffer yet, so disable it.
+	psoDesc.DepthStencilState.DepthEnable = FALSE;
+	psoDesc.DepthStencilState.StencilEnable = FALSE;
+
+	// Topology & Formats
+	psoDesc.SampleMask = UINT_MAX; // 0xFFFFFFFF
+	psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	psoDesc.NumRenderTargets = 1;
+	psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM; // Must match SwapChain!
+	psoDesc.SampleDesc.Count = 1;
+
+	// Create it!
+	ASSERT_SUCCEEDED(device2->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pipelineState)),
+		"Failed to create PSO")
+
+#pragma endregion
+
+#pragma region Block D: The "Recording Tools" (Execution)
 
 	// 1.11 Create a Command Allocators (One per back buffer) 
 	//------------------------------------------------------
@@ -455,6 +601,8 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 
+#pragma endregion
+
 	//======================
 	// THE EVENT LOOP
 	//======================
@@ -484,11 +632,12 @@ int main(int argc, char* argv[])
 			}
 			else if (event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)
 			{
-				int newWidth = event.window.data1;
-				int newHeight = event.window.data2;
+				// 1. Update the variables that the Viewport uses!
+				width = event.window.data1;
+				height = event.window.data2;
 
 				Resize(
-					newWidth, newHeight,
+					width, height,
 					device2, swapChain4, rtvHeap, backBuffers,
 					commandQueue, fence1, fenceEvent, currentfenceValue,
 					frameFenceValues, frameIndex, rtvDescriptorSize
@@ -565,11 +714,63 @@ int main(int argc, char* argv[])
 		//=======================
 		// 2.4.1 Calculate the Handle (Pointer) to the current RTV
 		// Logic: Start of Heap + (Frame Index * Size of one Slot)
-		D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
-		rtvHandle.ptr += (static_cast<SIZE_T>(frameIndex) * rtvDescriptorSize);
+		D3D12_CPU_DESCRIPTOR_HANDLE currentRtvHandle = rtvHeap->GetCPUDescriptorHandleForHeapStart();
+		currentRtvHandle.ptr += (static_cast<SIZE_T>(frameIndex) * rtvDescriptorSize);
 
 		// 2.4.2 clear the RTV
-		commandList->ClearRenderTargetView(rtvHandle,clearColor,0,nullptr);
+		commandList->ClearRenderTargetView(currentRtvHandle,clearColor,0,nullptr);
+
+		// ==========================================================
+		// CHALLENGE 2: DRAW THE TRIANGLE
+		// ==========================================================
+		// 1. Bind the Root Signature & PSO
+		// --------------------------------
+		// Tell the GPU: "Use this contract (Root Sig) and these compiled shaders (PSO)"
+		commandList->SetGraphicsRootSignature(rootSignature.Get());
+		commandList->SetPipelineState(pipelineState.Get());
+
+		// 2. Setup Input Assembly
+		// -----------------------
+		// Tell the GPU how to interpret the vertices. 
+		// TRIANGLELIST = Every 3 vertices make a distinct triangle.
+		commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+		// 3. Setup Viewport & Scissor Rect
+		// --------------------------------
+		// VIEWPORT: Maps the clip space (-1 to +1) to pixel coordinates (0 to 640).
+		D3D12_VIEWPORT viewport = {};
+		viewport.TopLeftX = 0;
+		viewport.TopLeftY = 0;
+		viewport.Width = static_cast<float>(width);
+		viewport.Height = static_cast<float>(height);
+		viewport.MinDepth = 0.0f;
+		viewport.MaxDepth = 1.0f;
+
+		// SCISSOR RECT: Pixels outside this box are killed. (We want the whole screen).
+		D3D12_RECT scissorRect = {};
+		scissorRect.left = 0;
+		scissorRect.top = 0;
+		scissorRect.right = width;
+		scissorRect.bottom = height;
+
+		commandList->RSSetViewports(1, &viewport);
+		commandList->RSSetScissorRects(1, &scissorRect);
+
+		// 4. Output Merger (Bind Render Target)
+		// -------------------------------------
+		// CRITICAL: ClearRenderTargetView just clears memory. It does NOT set the 
+		// render target for drawing. We must strictly tell the GPU: "Draw to this handle."
+		commandList->OMSetRenderTargets(1, &currentRtvHandle, FALSE, nullptr);
+
+		// 5. THE DRAW CALL
+		// ----------------
+		// VertexCount: 3 (Triangle)
+		// InstanceCount: 1 (Just one triangle)
+		// StartVertex: 0
+		// StartInstance: 0
+		commandList->DrawInstanced(3, 1, 0, 0);
+
+		// ==========================================================
 
 		//*******//
 		//PRESENT//
